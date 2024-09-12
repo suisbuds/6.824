@@ -137,10 +137,10 @@ func (c *Coordinator) Done() bool {
 	// ret := false
 
 	// Your code here.
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	// c.mu.Lock()
+	// defer c.mu.Unlock()
 	// 所有任务全部完成
-	return c.ReduceRemain == 0
+	return true
 }
 
 // create a Coordinator.

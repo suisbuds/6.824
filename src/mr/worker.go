@@ -123,7 +123,7 @@ func DoMapTask(mapf func(string, string) []KeyValue) (int, bool) {
 	for i := 0; i < nReduce; i++ {
 		// 中间文件格式
 		fileName := fmt.Sprintf("mr-%d-%d", taskId, i)
-		file, err := os.Create(fileName)
+		file, _ := os.Create(fileName)
 		if err != nil {
 			log.Fatalf("cannot create %v file", fileName)
 		}
