@@ -1,7 +1,6 @@
 package mr
 
 import (
-	// "fmt"
 	"log"
 	"net"
 	"net/http"
@@ -11,118 +10,120 @@ import (
 	"time"
 )
 
+// coordinator服务器
 type Coordinator struct {
 	// Your definitions here.
-
-	// 任务列表
-	mapTask    []Task
-	reduceTask []Task
-
-	path     string   // 服务器运行路径
-	fileName []string // 输入的文件名
-
-	// 待办任务数量
-	mapRemain    int
-	reduceRemain int
-
-	// 保护元数据
-	mu sync.Mutex
+	// 可以记录worker的健康状态map?
+	mu           sync.Mutex // 互斥锁在并发时保护服务器数据
+	Path  string // 服务器运行地址
+	FileNames    []string   //输入的所有文件
+	MapTask      []Task
+	ReduceTask   []Task
+	MapRemain    int        // 剩余map任务数量
+	ReduceRemain int        // 剩余reduce任务数量
 }
 
 // Your code here -- RPC handlers for the worker to call.
+// 采用时间戳判断worker崩溃或执行任务超时
+// coordinator周期性检查任务是否超时，如果超时10s，重新分发任务
 func (c *Coordinator) AskMapTask(args *AskMapArgs, reply *AskMapReply) error {
-	curTime := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.mapRemain == 0 {
-		reply.Finished = true
-		reply.TaskId = -1
+	if c.MapRemain == 0 {
+		reply.TaskId = ALL_FINISH
+		reply.AllFinish = true
 		return nil
 	}
-	for index, task := range c.mapTask {
-		duration := curTime.Sub(c.mapTask[index].StartTime)
-		if task.State == UNASSIGNED || (task.State == PROGRESS && duration > 10.0) {
-			c.mapTask[index].State = PROGRESS
-			c.mapTask[index].StartTime = curTime
-			c.mapTask[index].WorkerMachine = Machine{args.WorkerMachine.Path}
-			reply.TaskId = index
-			reply.FileName = c.fileName[index]
-			reply.Path = c.path
-			reply.NReduce = len(c.reduceTask)
-			reply.Finished = false
+	curTime := time.Now()
+	// 分配所有任务
+	for i, task := range c.MapTask {
+		duration := curTime.Sub(c.MapTask[i].StartTime)
+		// 任务未分配或执行超时
+		if task.State == UNASSIGNED || (task.State == PROGRESS && duration.Seconds() > 10.0) {
+			c.MapTask[i].State = PROGRESS
+			c.MapTask[i].Worker = Machine{Path: args.Worker.Path}
+			c.MapTask[i].StartTime = curTime
+			reply.Path=c.Path
+			reply.FileName = c.FileNames[i]
+			reply.TaskId = i
+			reply.NReduce = len(c.ReduceTask)
+			reply.AllFinish = false
 			return nil
 		}
 	}
-	reply.Finished = false
-	reply.TaskId = -1
+	reply.TaskId = BUSY // 无空闲worker
+	reply.AllFinish = false
+	return nil
+}
+
+func (c *Coordinator) MapFinish(args *TaskFinishArgs, _ *TaskFinishReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i:=args.TaskId
+	c.MapTask[i].State=FINISH
+	c.MapRemain--
 	return nil
 }
 
 func (c *Coordinator) AskReduceTask(args *AskReduceArgs, reply *AskReduceReply) error {
-	curTime := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.reduceRemain == 0 {
-		reply.TaskId = -1
-		reply.Finished = true
+	if c.ReduceRemain == 0 {
+		reply.TaskId = ALL_FINISH
+		reply.AllFinish = true
 		return nil
 	}
-	for index, task := range c.reduceTask {
-		duration := curTime.Sub(c.reduceTask[index].StartTime)
-		if task.State == UNASSIGNED || (task.State == PROGRESS && duration > 10.0) {
-			c.reduceTask[index].State = PROGRESS
-			c.reduceTask[index].StartTime = curTime
-			for _, task := range c.mapTask {
-				reply.MiddleMachine = append(reply.MiddleMachine, task.WorkerMachine)
+	curTime:=time.Now()
+	for i, task := range c.ReduceTask {
+		duration:=curTime.Sub(c.ReduceTask[i].StartTime)
+		// 任务未分配或执行超时
+		if task.State == UNASSIGNED || (task.State == PROGRESS && duration.Seconds() > 10.0) {
+			c.ReduceTask[i].State = PROGRESS
+			c.ReduceTask[i].Worker = Machine{Path: args.Worker.Path}
+			c.ReduceTask[i].StartTime = curTime
+			// 返回正在执行map处理intermediate files的workers
+			for _, mapTask := range c.MapTask {
+				reply.IntermediateWorkers = append(reply.IntermediateWorkers, mapTask.Worker)
 			}
-			c.reduceTask[index].WorkerMachine = Machine{args.WorkerMachine.Path}
-			reply.TaskId = index
-			reply.Finished = false
+			reply.TaskId = i
+			reply.AllFinish = false
 			return nil
 		}
 	}
-	reply.Finished = false
-	reply.TaskId = -1
+	reply.TaskId = BUSY // 无空闲worker
+	reply.AllFinish = false
 	return nil
 }
 
-func (c *Coordinator) MapFinish(args *TaskFinishedArgs, _ *TaskFinishedReply) error {
+func (c *Coordinator) ReduceFinish(args *TaskFinishArgs, _ *TaskFinishReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	i := args.TaskId
-	c.mapTask[i].State = COMPLETE
-	c.mapRemain--
-	// fmt.Printf("map task %v finished\n", i)
-	return nil
-}
-
-func (c *Coordinator) ReduceFinish(args *TaskFinishedArgs, _ *TaskFinishedReply) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	i := args.TaskId
-	c.reduceTask[i].State = COMPLETE
-	c.reduceRemain--
-	// fmt.Printf("reduce task %v finished\n", i)
+	i:=args.TaskId
+	c.ReduceTask[i].State=FINISH
+	// 执行完一个reduce任务
+	c.ReduceRemain--
 	return nil
 }
 
 // an example RPC handler.
-//
+// rpc方法，args由发送方填充，reply由接收方填充，返回err
 // the RPC argument and reply types are defined in rpc.go.
-// RPC函数示例
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
 	return nil
 }
 
 // start a thread that listens for RPCs from worker.go
-// 运行服务器
+// rpc用于服务器通信，coordinator接受请求
 func (c *Coordinator) server() {
+	// 将coordinator方法注册到本地服务器，使rpc发送方worker可以调用
 	rpc.Register(c)
+	// 本地服务器可以处理http request
 	rpc.HandleHTTP()
 	//l, e := net.Listen("tcp", ":1234")
 	sockname := coordinatorSock()
 	os.Remove(sockname)
+	// 获取socket, 并调用http.serve监听其他服务器请求
 	l, e := net.Listen("unix", sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
@@ -133,12 +134,13 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
+	// ret := false
 
 	// Your code here.
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	return c.reduceRemain==0
+	// 所有任务全部完成
+	return c.ReduceRemain == 0
 }
 
 // create a Coordinator.
@@ -148,24 +150,26 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
-	nMap := len(files)
-	c.mapTask = make([]Task, nMap)
-	c.reduceTask = make([]Task, nReduce)
 	path, err := os.Getwd()
 	if err != nil {
-		log.Fatal("Getwd error")
+		log.Fatalf("coordinator getwd error")
 	}
-	c.path = path
-	c.fileName = make([]string, nMap) // map任务的文件名
-	c.reduceRemain = nReduce
-	c.mapRemain = nMap
-	for i, filename := range files {
+	// 需要执行map的文件
+	nMap := len(files)
+	c.MapTask = make([]Task, nMap)
+	c.ReduceTask = make([]Task, nReduce)
+	c.MapRemain = nMap
+	c.ReduceRemain = nReduce
+	c.FileNames = make([]string, nMap)
+	c.Path = path
+	for i, file := range files {
 		if err != nil {
-			log.Fatalf("cannot open %v", filename)
+			log.Fatalf("cannot open %v file", file)
+		} else {
+			c.FileNames[i] = file
 		}
-		c.fileName[i] = filename
 	}
-
+	// coordinator注册到rpc
 	c.server()
 	return &c
 }
