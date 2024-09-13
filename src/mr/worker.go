@@ -30,12 +30,59 @@ func ihash(key string) int {
 
 // main/mrworker.go calls this function.
 
+
+// loadPlugin后传入mapf和reducef
+// 最终输出键值对并输入到intermediate：func mapf(filename string, contents string) []KeyValue
+// func reducef(key string, values []string) string
+// mrsequential是示例，由mrworker调用Worker并传入mapf和reducef
+// worker通过rpc调用coordinator的方法
+func Worker(mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) {
+
+	// Your worker implementation here.
+	mapFinish := false
+	reduceFinish := false
+	for !mapFinish || !reduceFinish {
+		// worker需要阻塞，只有最后一个 map 任务完成，reduce 任务才能启动
+		// 也可以写成coordinator发送消息是否开始reduce
+		if !mapFinish {
+			// ret不能是-1
+			if ret, finish := DoMapTask(mapf); ret >= 0 {
+				args := TaskFinishArgs{ret}
+				reply := TaskFinishReply{}
+				// 非阻塞式，轮询直至任务完成
+				for !call("Coordinator.MapFinish", &args, &reply) {
+				}
+				// fmt.Printf("map task %d finished\n", ret)
+			} else if finish {
+				// 全部完成
+				mapFinish = true
+			}
+		} else {
+			// 开始reduce
+			if ret, finish := DoReduceTask(reducef); ret >= 0 {
+				args := TaskFinishArgs{ret}
+				reply := TaskFinishReply{}
+				// 轮询reduce任务是否完成
+				for !call("Coordinator.ReduceFinish", &args, &reply) {
+				}
+				// fmt.Printf("reduce task %d finished\n", ret)
+			} else if finish {
+				reduceFinish = true
+			}
+		}
+	}
+	// 全部完成
+	// uncomment to send the Example RPC to the coordinator.
+	// CallExample()
+}
+
 // worker有两种状态，执行reduce任务或map任务
 // 返回taskId和执行状态, FAILED表示无id
 func DoMapTask(mapf func(string, string) []KeyValue) (int, bool) {
 	path, err := os.Getwd()
 	if err != nil {
-		return -1, false
+		return FAILED, false
 	}
 	// worker地址
 	args := AskMapArgs{MachinePath{path}}
@@ -43,12 +90,12 @@ func DoMapTask(mapf func(string, string) []KeyValue) (int, bool) {
 	// 调用map请求
 	ok := call("Coordinator.AskMapTask", &args, &reply)
 	if !ok {
-		fmt.Printf("Call AskMapTask failed!\n")
-		return -1, false
+		// fmt.Printf("Call AskMapTask failed!\n")
+		return FAILED, false
 	}
-	if reply.TaskId == -1 {
-		fmt.Printf("All map task busy or over!\n")
-		return -1, reply.AllFinish
+	if reply.TaskId == -1&&(reply.Message==ALL_FINISH||reply.Message==BUSY) {
+		// fmt.Printf("All map task busy or over!\n")
+		return FAILED, reply.AllFinish
 	}
 	// 执行map任务
 	taskId := reply.TaskId
@@ -74,16 +121,16 @@ func DoMapTask(mapf func(string, string) []KeyValue) (int, bool) {
 		intermediate[i] = append(intermediate[i], kv)
 	}
 	for i := 0; i < nReduce; i++ {
-		// 注意中间文件格式: mr-%d%d
-		fileName := fmt.Sprintf("mr-%d%d", taskId, i)
+		// 注意文件格式要统一: mr-%d-%d
+		fileName := fmt.Sprintf("mr-%d-%d", taskId, i)
 		file, _ := os.Create(fileName)
 		// 使用json将键值对输入到intermediate
 		enc := json.NewEncoder(file)
 		for _, kv := range intermediate[i] {
 			err := enc.Encode(&kv)
 			if err != nil {
-				fmt.Printf("Encode failed!\n")
-				return -1, false
+				// fmt.Printf("Encode failed!\n")
+				return FAILED, false
 			}
 		}
 		file.Close()
@@ -104,31 +151,31 @@ func DoReduceTask(reducef func(string, []string) string) (int, bool) {
 	// 获取工作目录路径
 	path, err := os.Getwd()
 	if err != nil {
-		return -1, false
+		return FAILED, false
 	}
 	args := AskReduceArgs{MachinePath{path}}
 	reply := AskReduceReply{}
 	// 调用reduce请求
 	ok := call("Coordinator.AskReduceTask", &args, &reply)
 	if !ok {
-		fmt.Printf("Call AskReduceTask failed!\n")
-		return -1, false
+		// fmt.Printf("Call AskReduceTask failed!\n")
+		return FAILED, false
 	}
-	if reply.TaskId == -1 {
+	if reply.TaskId == -1&&(reply.Message==ALL_FINISH||reply.Message==BUSY) {
 		// fmt.Printf("All reduce task busy or over!\n")
-		return -1, reply.AllFinish
+		return FAILED, reply.AllFinish
 	}
 	// 读取intermediate files
 	intermediate := []KeyValue{}
-	intermediateWorkers := reply.IntermediateWorkersPath
+	intermediateWorkers := reply.IntermediateWorkers
 	taskId := reply.TaskId
 	for i, worker := range intermediateWorkers {
 		// 读取的中间文件
-		fileName := fmt.Sprintf("%s/mr-%d%d", worker.Path, i, taskId)
+		fileName := fmt.Sprintf("%s/mr-%d-%d", worker.Path, i, taskId)
 		file, err := os.Open(fileName)
 		if err != nil {
-			fmt.Printf("Open %s failed!\n", fileName)
-			return -1, false
+			// fmt.Printf("Open %s failed!\n", fileName)
+			return FAILED, false
 		}
 		dec := json.NewDecoder(file)
 		// 课程提示
@@ -145,8 +192,8 @@ func DoReduceTask(reducef func(string, []string) string) (int, bool) {
 	// 创建临时文件，输出reduce的结果
 	tmpFile, err := ioutil.TempFile(path, "tmp")
 	if err != nil {
-		fmt.Printf("TempFile failed!\n")
-		return -1, false
+		// fmt.Printf("TempFile failed!\n")
+		return FAILED, false
 	}
 	// 外部排序,将相同的键值对放到一起,然后reduce生成reduce output
 	i := 0
@@ -172,57 +219,12 @@ func DoReduceTask(reducef func(string, []string) string) (int, bool) {
 	// 对于 reduce 任务，此时结果文件已经打开，所以需要新建temp, 避免worker崩溃后在磁盘生成错误结果
 	err = os.Rename(tmpFile.Name(), newPath)
 	if err != nil {
-		fmt.Printf("Rename failed!\n")
-		return -1, false
+		// fmt.Printf("Rename failed!\n")
+		return FAILED, false
 	}
 	tmpFile.Close()
 	// reduce任务完成
 	return taskId, false
-}
-
-// loadPlugin后传入mapf和reducef
-// 最终输出键值对并输入到intermediate：func mapf(filename string, contents string) []KeyValue
-// func reducef(key string, values []string) string
-// mrsequential是示例，由mrworker调用Worker并传入mapf和reducef
-// worker通过rpc调用coordinator的方法
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
-
-	// Your worker implementation here.
-	mapFinish := false
-	reduceFinish := false
-	for !mapFinish || !reduceFinish {
-		// worker需要阻塞，只有最后一个 map 任务完成，reduce 任务才能启动
-		// 也可以写成coordinator发送消息是否开始reduce
-		if !mapFinish {
-			if ret, finish := DoMapTask(mapf); ret >= 0 {
-				args := TaskFinishArgs{ret}
-				reply := TaskFinishReply{}
-				// 非阻塞式，轮询，确认map是否全部完成
-				for !call("Coordinator.MapFinish", &args, &reply) {
-				}
-				fmt.Printf("map task %d finished\n", ret)
-			} else if finish {
-				// 全部完成
-				mapFinish = true
-			}
-		} else {
-			// 开始reduce
-			if ret, finish := DoReduceTask(reducef); ret >= 0 {
-				args := TaskFinishArgs{ret}
-				reply := TaskFinishReply{}
-				// 轮询reduce任务是否完成
-				for !call("Coordinator.ReduceFinish", &args, &reply) {
-				}
-				fmt.Printf("reduce task %d finished\n", ret)
-			} else if finish {
-				reduceFinish = true
-			}
-		}
-	}
-	// 全部完成
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
 }
 
 // example function to show how to make an RPC call to the coordinator.
@@ -234,7 +236,7 @@ func CallExample() {
 	// declare an argument structure.
 	args := ExampleArgs{}
 
-	// fill in the argument(s).
+	// fill in the argument(s).U+
 	args.X = 99
 
 	// declare a reply structure.

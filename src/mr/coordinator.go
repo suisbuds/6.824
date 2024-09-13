@@ -1,7 +1,7 @@
 package mr
 
 import (
-	"fmt"
+	// "fmt"
 	"log"
 	"net"
 	"net/http"
@@ -41,6 +41,7 @@ func (c *Coordinator) AskMapTask(args *AskMapArgs, reply *AskMapReply) error {
 	defer c.mu.Unlock()
 	if c.MapRemain == 0 {
 		reply.TaskId = -1
+		reply.Message=ALL_FINISH
 		reply.AllFinish = true
 		return nil
 	}
@@ -51,17 +52,19 @@ func (c *Coordinator) AskMapTask(args *AskMapArgs, reply *AskMapReply) error {
 		// 任务未分配或执行超时
 		if task.State == UNASSIGNED || (task.State == PROGRESS && duration.Seconds() > 10.0) {
 			c.MapTask[i].State = PROGRESS
-			c.MapTask[i].WorkerPath = MachinePath{Path: args.WorkerPath.Path}
+			c.MapTask[i].Worker = MachinePath{Path: args.Worker.Path}
 			c.MapTask[i].StartTime = curTime
 			reply.Path = c.Path
 			reply.FileName = c.FileNames[i]
 			reply.TaskId = i
 			reply.NReduce = len(c.ReduceTask)
+			reply.Message=CONTINUE
 			reply.AllFinish = false
 			return nil
 		}
 	}
 	reply.TaskId = -1 // 无空闲worker
+	reply.Message=BUSY
 	reply.AllFinish = false
 	return nil
 }
@@ -72,7 +75,7 @@ func (c *Coordinator) MapFinish(args *TaskFinishArgs, _ *TaskFinishReply) error 
 	i := args.TaskId
 	c.MapTask[i].State = FINISH
 	c.MapRemain--
-	fmt.Printf("map task %d finish\n", i)
+	// fmt.Printf("map task %d finish\n", i)
 	return nil
 }
 
@@ -81,6 +84,7 @@ func (c *Coordinator) AskReduceTask(args *AskReduceArgs, reply *AskReduceReply) 
 	defer c.mu.Unlock()
 	if c.ReduceRemain == 0 {
 		reply.TaskId = -1
+		reply.Message=ALL_FINISH
 		reply.AllFinish = true
 		return nil
 	}
@@ -90,19 +94,21 @@ func (c *Coordinator) AskReduceTask(args *AskReduceArgs, reply *AskReduceReply) 
 		// 任务未分配或执行超时
 		if task.State == UNASSIGNED || (task.State == PROGRESS && duration.Seconds() > 10.0) {
 			c.ReduceTask[i].State = PROGRESS
-			c.ReduceTask[i].WorkerPath = MachinePath{Path: args.WorkerPath.Path}
+			c.ReduceTask[i].Worker = MachinePath{Path: args.Worker.Path}
 			c.ReduceTask[i].StartTime = curTime
 			// 返回正在执行map处理intermediate files的workers
 			for _, mapTask := range c.MapTask {
-				reply.IntermediateWorkersPath = append(reply.IntermediateWorkersPath, mapTask.WorkerPath)
+				reply.IntermediateWorkers = append(reply.IntermediateWorkers, mapTask.Worker)
 			}
 			reply.TaskId = i
+			reply.Message=CONTINUE
 			reply.AllFinish = false
 			return nil
 		}
 	}
 	reply.TaskId = -1 // 无空闲worker
 	reply.AllFinish = false
+	reply.Message=BUSY
 	return nil
 }
 
@@ -113,7 +119,7 @@ func (c *Coordinator) ReduceFinish(args *TaskFinishArgs, _ *TaskFinishReply) err
 	c.ReduceTask[i].State = FINISH
 	// 执行完一个reduce任务
 	c.ReduceRemain--
-	fmt.Printf("reduce task %d finish\n", i)
+	// fmt.Printf("reduce task %d finish\n", i)
 	return nil
 }
 
