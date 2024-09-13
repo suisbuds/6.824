@@ -27,31 +27,33 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
-// 状态变量
+// 状态变量, 需要考虑到int值与任务id的冲突
 const (
-	FAILED     = -1 //执行任务超时或请求失败
-	UNASSIGNED = 0  //空闲
-	PROGRESS   = 1  //执行中
-	FINISH     = 2  //任务完成
-	ALL_FINISH = 3  //所有任务完成
-	BUSY=4 //无空闲worker
+	// FAILED = -1 //超时或请求失败
+	// 单个任务状态
+	UNASSIGNED = 0 //空闲
+	PROGRESS   = 1 //执行中
+	FINISH     = 2 //任务完成
+	// 所有任务状态
+	// ALL_FINISH = 3 //所有任务完成
+	// BUSY       = 4 //无空闲worker
 )
 
 // worker服务器地址
-type Machine struct {
+type MachinePath struct {
 	Path string
 }
 
 // 使用时间戳和超时机制, 让coordinator周期性检查任务，判断worker是否崩溃
 type Task struct {
-	State     int
-	Worker    Machine
-	StartTime time.Time
+	State      int
+	WorkerPath MachinePath
+	StartTime  time.Time
 }
 
 // worker请求coordinator分配map任务
 type AskMapArgs struct {
-	Worker Machine
+	WorkerPath MachinePath
 }
 
 // coordinator返回map情况
@@ -65,21 +67,22 @@ type AskMapReply struct {
 
 // worker请求coordinator分配reduce任务
 type AskReduceArgs struct {
-	Worker Machine
+	WorkerPath MachinePath
 }
 
 // coordinator返回reduce情况
 type AskReduceReply struct {
-	TaskId    int       // reduce任务编号
-	IntermediateWorkers   []Machine // 处理map任务和intermediate files的workers
-	AllFinish bool      // 所有reduce任务完成
+	TaskId                  int           // reduce任务编号
+	IntermediateWorkersPath []MachinePath // 处理map任务和intermediate files的workers
+	AllFinish               bool          // 所有reduce任务完成
 }
 
 type TaskFinishArgs struct {
 	TaskId int
 }
 
-type TaskFinishReply struct{}
+type TaskFinishReply struct {
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
