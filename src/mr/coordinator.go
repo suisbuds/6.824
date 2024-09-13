@@ -144,7 +144,7 @@ func (c *Coordinator) Done() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// 所有任务全部完成
-	return c.ReduceRemain==0
+	return c.ReduceRemain == 0
 }
 
 // create a Coordinator.

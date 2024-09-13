@@ -74,7 +74,7 @@ func DoMapTask(mapf func(string, string) []KeyValue) (int, bool) {
 		intermediate[i] = append(intermediate[i], kv)
 	}
 	for i := 0; i < nReduce; i++ {
-		// 中间文件格式
+		// 注意中间文件格式: mr-%d%d
 		fileName := fmt.Sprintf("mr-%d%d", taskId, i)
 		file, _ := os.Create(fileName)
 		// 使用json将键值对输入到intermediate
@@ -115,7 +115,7 @@ func DoReduceTask(reducef func(string, []string) string) (int, bool) {
 		return -1, false
 	}
 	if reply.TaskId == -1 {
-		fmt.Printf("All reduce task busy or over!\n")
+		// fmt.Printf("All reduce task busy or over!\n")
 		return -1, reply.AllFinish
 	}
 	// 读取intermediate files
