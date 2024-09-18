@@ -29,7 +29,7 @@ type ExampleReply struct {
 
 // 状态变量, 需要考虑到int值与任务id的冲突
 const (
-	FAILED = -1 //超时或请求失败
+	FAILED = -1 //异常错误
 	// 单个任务状态
 	UNASSIGNED = 0 //空闲
 	PROGRESS   = 1 //执行中

@@ -117,6 +117,7 @@ func DoMapTask(mapf func(string, string) []KeyValue) (int, bool) {
 	intermediate := make([][]KeyValue, nReduce)
 	for _, kv := range kva {
 		// ihash将键均匀分布到reduce任务
+		// 传统hash取模算法
 		i := ihash(kv.Key) % nReduce
 		intermediate[i] = append(intermediate[i], kv)
 	}
