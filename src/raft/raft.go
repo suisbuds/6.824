@@ -21,6 +21,7 @@ import (
 	//	"bytes"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	// "6.824/labgob"
 	"6.824/labrpc"
@@ -50,9 +51,14 @@ type ApplyMsg struct {
 // 自定义struct和常量
 
 const (
+	FAILED    = -1
 	LEADER    = 1
 	CANDIDATE = 2
 	FOLLOWER  = 3
+
+	BROADCASTTIME        = 100  // 限制为每秒十次心跳
+	ELECTIONTIMEOUTBASE  = 1000 // broadcastTime ≪ electionTimeout ≪ MTBF
+	ELECTIONTIMEOUTRANGE = 1000
 )
 
 type LogEntry struct {
@@ -99,10 +105,16 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
+	if rf.killed() {
+		return FAILED, false
+	}
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	rf.mu.Lock()
+	term = rf.CurrentTerm
+	isleader = rf.State == LEADER
+	rf.mu.Unlock()
 	return term, isleader
 }
 
@@ -162,17 +174,63 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term int // candidate的term
+	CandidateId int
+	LastLogIndex int // candidate的LogIndex
+	LastLogTerm int // candidate的LogTerm
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term int // 当前term
+	VoteGranted bool // candidate是否获得投票
+}
+
+// 自定义rpc的struct
+
+type AppendEntriesArgs struct {
+	Term int
+	LeaderId int
+	PrevLogIndex int
+	PrevLogTerm int
+	Entries []LogEntry
+	LeaderCommit int
+}
+
+type AppendEntriesReply struct {
+	Term int
+	Success bool
+	// 用于优化重传
+	XTerm int
+	XIndex int
+	XLen int
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	// DPrintf("[%d] Get RequestVote from %d", rf.me, args.CandidateId)
+	defer rf.mu.Unlock()
+	// 填充reply
+	reply.Term = rf.CurrentTerm
+	LastIndex:=rf.LastLogEntry().Index
+	LastTerm:=rf.LastLogEntry().Term
+	// 如果本地term>candidate的term, 拒绝投票
+	if rf.CurrentTerm>args.Term{
+		reply.VoteGranted=false
+		return
+	}else if rf.CurrentTerm<args.Term{
+		// 如果本地term<candidate的term, 则转换为follower
+		rf.State=FOLLOWER
+		rf.CurrentTerm=args.Term // 变为candidate的term
+		rf.VotedFor=FAILED // 取消投票权
+		rf.persist()
+	}
+
+	if rf.VotedFor==-1 && (LastTerm<args.LastLogTerm){}
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -222,11 +280,15 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
-	isLeader := true
+	_, isLeader := rf.GetState()
+	if !isLeader || rf.killed() {
+		rf.DPrintf("[%d] Start() Fail isleader = %t, isKilled = %t", rf.me, isLeader, rf.killed())
+		return -1, -1, false
+	}
 
 	// Your code here (2B).
 
-	return index, term, isLeader
+	return index, term, true
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -243,6 +305,7 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
+// 判断goroutines是否kill,需要lock
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
@@ -250,12 +313,29 @@ func (rf *Raft) killed() bool {
 
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
+// 无限期运行来执行raft集群的任务，直到server被杀死
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
+		rf.mu.Lock()
+		rf.UpdateApplied()
+		// 在任务函数中处理完元数据需要解锁，防止死锁
+		switch rf.State {
+		case LEADER:
+			rf.DoLeaderTask()
+		case CANDIDATE:
+			rf.DoCandidateTask()
+		case FOLLOWER:
+			// 选举超时，转换为candidate
+			if !rf.DoFollowerTask() {
+				continue
+			}
+		default:
+			rf.mu.Unlock()
+		}
 
 	}
 }
@@ -272,17 +352,75 @@ func (rf *Raft) ticker() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
+
+	rf.mu.Lock()
+
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.applych = applyCh
+	rf.cond = sync.NewCond(&rf.mu)
+	rf.DPrintf("[%d] is Making, len(peers) = %d\n", me, len(peers))
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.BroadcastTime = BROADCASTTIME
+	rf.ElectionTimeout = GerElectionTimeout()
+	rf.State = FOLLOWER // 初始化为follower
+	rf.CurrentTerm = 0
+	rf.VotedFor = -1 // 未投票
+	rf.MatchIndex = make([]int, len(peers))
+	rf.NextIndex = make([]int, len(peers))
+
+	rf.mu.Unlock()
 
 	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
+	rf.readPersist(persister.ReadRaftState()) // 读入磁盘可能需要持久化的变量
 
 	// start ticker goroutine to start elections
-	go rf.ticker()
+	go rf.ticker() // 创建一个协程开始运行服务器主函数ticker
 
 	return rf
 }
+
+// 自定义函数
+
+func (rf *Raft) DoLeaderTask() {
+	rf.mu.Unlock()
+}
+
+func (rf *Raft) DoFollowerTask() bool {
+	rf.DPrintf("[%d] 's ElectionTimeout = %d\n", rf.me, rf.ElectionTimeout)
+	// 超时转换为candidate
+	if rf.ElectionTimeout <= rf.BroadcastTime {
+		rf.State = CANDIDATE
+		rf.DPrintf("[%d] is ElectionTimeout, convert to CANDIDATE\n", rf.me)
+		rf.mu.Unlock()
+		return false
+	}
+	rf.ElectionTimeout -= rf.BroadcastTime
+	rf.mu.Unlock()
+	time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond)
+	return true
+}
+
+func (rf *Raft) DoCandidateTask() {
+	rf.CurrentTerm++
+	voteGranted := 1 // 得票数初始化为1
+	rf.VotedFor = rf.me
+	rf.persist()
+	rf.ElectionTimeout=GerElectionTimeout()
+	lastLogIndex:=rf.LastLogEntry().Index
+	lastLogTerm:=rf.LastLogEntry().Term
+	rf.DPrintf("[%d] start election, term = %d\n", rf.me, rf.CurrentTerm)	
+	// 处理完元数据, 在发送rpc时不得持有锁
+	rf.mu.Unlock()
+	for i:=0
+}
+
+func (rf *Raft) UpdateApplied() {}
+
+func (rf *Raft) UpdateCommitIndex() {}
+
+func (rf *Raft) TrySendEntries() {}
+
+func (rf *Raft) SendEntries() {}
