@@ -18,7 +18,7 @@ func (rf *Raft) DPrintf(format string, a ...interface{}) (n int, err error) {
 
 func GetElectionTimeout() int {
 	rand.Seed(time.Now().UnixNano())
-	return ELECTIONTIMEOUTBASE + int(rand.Int31n(ELECTIONTIMEOUTRANGE))
+	return ELECTION_TIMEOUT_BASE + int(rand.Int31n(ELECTION_TIMEOUT_RANGE))
 }
 
 func (rf *Raft) GetLogIndex(index int) LogEntry {
