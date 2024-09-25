@@ -41,21 +41,18 @@ type ApplyMsg struct {
 	Command      interface{}
 	CommandIndex int
 
-	// For 2D:
+	// For 2D: 日志压缩
 	SnapshotValid bool
 	Snapshot      []byte
 	SnapshotTerm  int
 	SnapshotIndex int
 }
 
-// 自定义struct和常量
-
 const (
-	FAILED    = -1
-	LEADER    = 1
-	CANDIDATE = 2
-	FOLLOWER  = 3
-
+	FAILED               = -1
+	LEADER               = 1
+	CANDIDATE            = 2
+	FOLLOWER             = 3
 	BROADCASTTIME        = 100  // 限制为每秒十次心跳
 	ELECTIONTIMEOUTBASE  = 1000 // broadcastTime ≪ electionTimeout ≪ MTBF
 	ELECTIONTIMEOUTRANGE = 1000
@@ -63,43 +60,40 @@ const (
 
 type LogEntry struct {
 	Command interface{}
-	Term    int // 任期
+	Term    int
 	Index   int // 日志条目的索引
 }
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
-	mu sync.Mutex // Lock to protect shared access to this peer's state
-	// 集群所有服务器
-	peers []*labrpc.ClientEnd // RPC end points of all peers
-	// 代替磁盘来可容错存储
-	persister *Persister // Object to hold this peer's persisted state
-	// 自己在peers的索引
-	me      int           // this peer's index into peers[]
-	dead    int32         // set by Kill()
-	applych chan ApplyMsg // 用于发送已提交的日志条目
-	cond    *sync.Cond    // 唤醒睡眠的候选者
-
+	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	peers     []*labrpc.ClientEnd // RPC end points of all peers
+	persister *Persister          // Object to hold this peer's persisted state
+	me        int                 // this peer's index into peers[]
+	dead      int32               // set by Kill()
+	applych   chan ApplyMsg       // channel,用于发送提交的日志
+	cond      *sync.Cond          // 唤醒睡眠的候选者
+	// quickCheck rune
+	// name string
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	BroadcastTime   int // leader发送AppendEntries的间隔时间
-	ElectionTimeout int // 选举超时时间
+	BroadcastTime   int // 心跳间隔
+	ElectionTimeout int // 随机选举超时
 
-	Log         []LogEntry // 日志条目，含索引
-	CurrentTerm int        // 最新term
-	VotedFor    int        // 当前投票的candidateId / nil
-	CommitIndex int        // 已提交的最新索引
-	LastApplied int        // 已应用到状态机的最新索引
-	NextIndex   []int      // 发送到服务器的下一个索引
-	MatchIndex  []int      // 要在服务器上复制的最新索引
+	Log         []LogEntry
+	CurrentTerm int
+	VotedFor    int
+	CommitIndex int   // 已提交的日志
+	LastApplied int   // 已应用的日志
+	NextIndex   []int // 即将发送到server的日志
+	MatchIndex  []int // 已经复制到server的日志
 
 	State int // 角色
 
-	LastIncludedIndex int // 快照将替换的之前的所有索引
-	LastIncludedTerm  int // 之前的term
-
+	LastIncludedIndex int // 快照压缩替换掉的之前的索引
+	LastIncludedTerm  int // 快照压缩替换掉的索引的term
 }
 
 // return currentTerm and whether this server
@@ -174,38 +168,38 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	Term int // candidate的term
-	CandidateId int
+	Term         int // candidate的term
+	CandidateId  int
 	LastLogIndex int // candidate的LogIndex
-	LastLogTerm int // candidate的LogTerm
+	LastLogTerm  int // candidate的LogTerm
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
-	Term int // 当前term
+	Term        int  // 当前term
 	VoteGranted bool // candidate是否获得投票
 }
 
 // 自定义rpc的struct
 
 type AppendEntriesArgs struct {
-	Term int
-	LeaderId int
+	Term         int
+	LeaderId     int
 	PrevLogIndex int
-	PrevLogTerm int
-	Entries []LogEntry
+	PrevLogTerm  int
+	Entries      []LogEntry
 	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
-	Term int
+	Term    int
 	Success bool
 	// 用于优化重传
-	XTerm int
+	XTerm  int
 	XIndex int
-	XLen int
+	XLen   int
 }
 
 // example RequestVote RPC handler.
@@ -216,21 +210,22 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	// 填充reply
 	reply.Term = rf.CurrentTerm
-	LastIndex:=rf.LastLogEntry().Index
-	LastTerm:=rf.LastLogEntry().Term
+	LastIndex := rf.LastLogEntry().Index
+	LastTerm := rf.LastLogEntry().Term
 	// 如果本地term>candidate的term, 拒绝投票
-	if rf.CurrentTerm>args.Term{
-		reply.VoteGranted=false
+	if rf.CurrentTerm > args.Term {
+		reply.VoteGranted = false
 		return
-	}else if rf.CurrentTerm<args.Term{
+	} else if rf.CurrentTerm < args.Term {
 		// 如果本地term<candidate的term, 则转换为follower
-		rf.State=FOLLOWER
-		rf.CurrentTerm=args.Term // 变为candidate的term
-		rf.VotedFor=FAILED // 取消投票权
+		rf.State = FOLLOWER
+		rf.CurrentTerm = args.Term // 变为candidate的term
+		rf.VotedFor = FAILED       // 取消投票权
 		rf.persist()
 	}
 
-	if rf.VotedFor==-1 && (LastTerm<args.LastLogTerm){}
+	if rf.VotedFor == -1 && (LastTerm < args.LastLogTerm) {
+	}
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -277,9 +272,11 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
+// 客户端向Raft服务器发送命令，创建日志条目并插入本地日志
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
+	// 请求失败
 	_, isLeader := rf.GetState()
 	if !isLeader || rf.killed() {
 		rf.DPrintf("[%d] Start() Fail isleader = %t, isKilled = %t", rf.me, isLeader, rf.killed())
@@ -313,7 +310,7 @@ func (rf *Raft) killed() bool {
 
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
-// 无限期运行来执行raft集群的任务，直到server被杀死
+// 无限期执行raft集群的任务，直到server被杀死
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
@@ -321,10 +318,12 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 		rf.mu.Lock()
-		rf.UpdateApplied()
-		// 在任务函数中处理完元数据需要解锁，防止死锁
+		// 更新已应用的日志
+		rf.UpdateLastApplied()
+		// 在任务函数中处理完元数据 / 耗时操作 需要解锁，防止死锁
 		switch rf.State {
 		case LEADER:
+			rf.mu.Unlock()
 			rf.DoLeaderTask()
 		case CANDIDATE:
 			rf.DoCandidateTask()
@@ -364,8 +363,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.BroadcastTime = BROADCASTTIME
-	rf.ElectionTimeout = GerElectionTimeout()
-	rf.State = FOLLOWER // 初始化为follower
+	rf.ElectionTimeout = GetElectionTimeout() // 随机选举超时
+	rf.State = FOLLOWER                       // 初始化为follower
 	rf.CurrentTerm = 0
 	rf.VotedFor = -1 // 未投票
 	rf.MatchIndex = make([]int, len(peers))
@@ -374,10 +373,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.mu.Unlock()
 
 	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState()) // 读入磁盘可能需要持久化的变量
+	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
-	go rf.ticker() // 创建一个协程开始运行服务器主函数ticker
+	go rf.ticker()
 
 	return rf
 }
@@ -385,21 +384,21 @@ func Make(peers []*labrpc.ClientEnd, me int,
 // 自定义函数
 
 func (rf *Raft) DoLeaderTask() {
-	rf.mu.Unlock()
+	
 }
 
 func (rf *Raft) DoFollowerTask() bool {
 	rf.DPrintf("[%d] 's ElectionTimeout = %d\n", rf.me, rf.ElectionTimeout)
 	// 超时转换为candidate
-	if rf.ElectionTimeout <= rf.BroadcastTime {
+	if rf.ElectionTimeout < rf.BroadcastTime {
 		rf.State = CANDIDATE
 		rf.DPrintf("[%d] is ElectionTimeout, convert to CANDIDATE\n", rf.me)
 		rf.mu.Unlock()
 		return false
 	}
-	rf.ElectionTimeout -= rf.BroadcastTime
+	rf.ElectionTimeout -= rf.BroadcastTime // 未超时，继续等待
 	rf.mu.Unlock()
-	time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond)
+	time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond) //
 	return true
 }
 
@@ -408,16 +407,19 @@ func (rf *Raft) DoCandidateTask() {
 	voteGranted := 1 // 得票数初始化为1
 	rf.VotedFor = rf.me
 	rf.persist()
-	rf.ElectionTimeout=GerElectionTimeout()
-	lastLogIndex:=rf.LastLogEntry().Index
-	lastLogTerm:=rf.LastLogEntry().Term
-	rf.DPrintf("[%d] start election, term = %d\n", rf.me, rf.CurrentTerm)	
+	rf.ElectionTimeout = GetElectionTimeout()
+	lastLogIndex := rf.LastLogEntry().Index
+	lastLogTerm := rf.LastLogEntry().Term
+	rf.DPrintf("[%d] start election, term = %d\n", rf.me, rf.CurrentTerm)
 	// 处理完元数据, 在发送rpc时不得持有锁
 	rf.mu.Unlock()
-	for i:=0
+
 }
 
-func (rf *Raft) UpdateApplied() {}
+// 应用已提交的日志, 同时更新LastApplied
+func (rf *Raft) UpdateLastApplied() {
+
+}
 
 func (rf *Raft) UpdateCommitIndex() {}
 
