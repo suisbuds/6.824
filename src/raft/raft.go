@@ -72,7 +72,7 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 	applych   chan ApplyMsg       // channel,用于发送提交的日志
-	cond      *sync.Cond          // 唤醒睡眠的候选者
+	cond      *sync.Cond          // 唤醒线程
 	// quickCheck rune
 	// name string
 	// Your data here (2A, 2B, 2C).
@@ -285,6 +285,9 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
+func (rf *Raft) sendAppendEntries() {}
+
+func(rf *Raft) sendInstallSnapshot(){}
 
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -432,21 +435,53 @@ func (rf *Raft) DoFollowerTask() bool {
 func (rf *Raft) DoCandidateTask() {
 	// prepare for election
 	rf.CurrentTerm++
-	voteGranted := 1    // 得票数初始化为1
+	votesGet := 1    // 得票数
 	rf.VotedFor = rf.me // 投票给自己
 	rf.persist()
 	rf.ElectionTimeout = GetElectionTimeout()
+	term:=rf.CurrentTerm
 	lastLogIndex := rf.LastLogEntry().Index
 	lastLogTerm := rf.LastLogEntry().Term
-	rf.DPrintf("[%d] start election, term = %d\n", rf.me, rf.CurrentTerm)
-	// 处理完元数据, 在发送rpc时不得持有锁
+	rf.DPrintf("[%d] start election, term = %d\n", rf.me, term)
 	rf.mu.Unlock()
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
-
+			go func(server int){
+				// rpc 填充
+				args:=RequestVoteArgs{
+					Term: term,
+					CandidateId: rf.me,
+					LastLogIndex: lastLogIndex,
+					LastLogTerm: lastLogTerm,
+				}
+				reply:=RequestVoteReply{}
+				rf.DPrintf()
+				// 发送rpc时不得持有锁，发送失败
+				if !rf.sendRequestVote(server, &args, &reply){
+					rf.cond.Broadcast() // 唤醒主线程
+					return
+				}
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				if reply.VoteGranted{
+					votesGet++
+				}
+				if reply.Term > rf.CurrentTerm{
+					rf.CurrentTerm = reply.Term
+					rf.State = FOLLOWER
+					rf.ElectionTimeout = GetElectionTimeout()
+					rf.persist()
+				}
+				rf.cond.Broadcast()
+			}(i)
 		}
 	}
+	var timeout rune
+	go func(){}()
+	for {
 
+	}
+	rf.DPrintf()
 }
 
 /*
