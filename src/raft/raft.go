@@ -71,27 +71,28 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
-	applych   chan ApplyMsg       // channel,用于发送提交的日志
-	cond      *sync.Cond          // 唤醒线程
+
+	applych chan ApplyMsg // channel,用于发送提交的日志
+	cond    *sync.Cond    // 唤醒线程
 	// quickCheck rune
 	// name string
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// initialize in Make()
 	BroadcastTime   int // 心跳间隔
 	ElectionTimeout int // 随机选举超时
+	Log             []LogEntry
+	Role            int // 角色
+	CurrentTerm     int
+	VotedFor        int
+	NextIndex       []int // 即将发送到server的日志
+	MatchIndex      []int // 已经复制到server的日志
 
-	Log         []LogEntry
-	CurrentTerm int
-	VotedFor    int
-	CommitIndex int   // 已提交的日志
-	LastApplied int   // 已应用的日志
-	NextIndex   []int // 即将发送到server的日志
-	MatchIndex  []int // 已经复制到server的日志
-
-	State int // 角色
-
+	// lazy init
+	CommitIndex       int // 已提交的日志
+	LastApplied       int // 已应用的日志
 	LastIncludedIndex int // 快照压缩替换掉的之前的索引
 	LastIncludedTerm  int // 快照压缩替换掉的索引的term
 }
@@ -107,7 +108,7 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	rf.mu.Lock()
 	term = rf.CurrentTerm
-	isleader = rf.State == LEADER
+	isleader = rf.Role == LEADER
 	rf.mu.Unlock()
 	return term, isleader
 }
@@ -229,7 +230,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	} else if rf.CurrentTerm < args.Term {
 		// convert to follower
-		rf.State = FOLLOWER
+		rf.Role = FOLLOWER
 		rf.CurrentTerm = args.Term // candidate's term
 		rf.VotedFor = -1           // 重置选票，中间状态
 		rf.persist()
@@ -249,7 +250,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.persist() // 持久化保存
 		// 投票成功，重置选举超时，防止不符合的candidate阻塞潜在leader
 		rf.ElectionTimeout = GetElectionTimeout()
-		rf.DPrintf("[%d %d] vote for %d, term = %d", rf.me, rf.State, args.CandidateId, rf.CurrentTerm)
+		rf.DPrintf("[%d %d] vote for %d, term = %d", rf.me, rf.Role, args.CandidateId, rf.CurrentTerm)
 	}
 	// rf.currentTerm == args.Term，直接结束
 }
@@ -348,7 +349,7 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		rf.UpdateLastApplied()
 		// 在任务函数中处理完元数据 / 在耗时操作前 记得解锁，防止死锁
-		switch rf.State {
+		switch rf.Role {
 		case LEADER:
 			rf.DoLeaderTask()
 		case CANDIDATE:
@@ -388,8 +389,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.BroadcastTime = BROADCAST_TIME
-	rf.ElectionTimeout = GetElectionTimeout() // 随机选举超时
-	rf.State = FOLLOWER                       // 初始化为follower
+	rf.ElectionTimeout = GetElectionTimeout() // 初始化，随机选举超时
+	rf.Role = FOLLOWER                        // 初始化为follower
 	rf.CurrentTerm = 0
 	rf.VotedFor = -1 // 未投票
 	rf.MatchIndex = make([]int, len(peers))
@@ -419,7 +420,7 @@ func (rf *Raft) DoFollowerTask() bool {
 	rf.DPrintf("[%d] 's ElectionTimeout = %d\n", rf.me, rf.ElectionTimeout)
 	// 检查是否即将超时，electionTimeout<100ms
 	if rf.ElectionTimeout < rf.BroadcastTime {
-		rf.State = CANDIDATE
+		rf.Role = CANDIDATE
 		rf.DPrintf("[%d] is ElectionTimeout, convert to CANDIDATE\n", rf.me)
 		rf.mu.Unlock()
 		return false
@@ -448,13 +449,14 @@ func (rf *Raft) DoCandidateTask() {
 	votesGet := 1       // 得票数
 	rf.VotedFor = rf.me // 投票给自己
 	rf.persist()
-	rf.ElectionTimeout = GetElectionTimeout()
+	rf.ElectionTimeout = GetElectionTimeout() // 重置选举超时
 	term := rf.CurrentTerm
 	electionTimeout := rf.ElectionTimeout
 	lastLogIndex := rf.LastLogEntry().Index
 	lastLogTerm := rf.LastLogEntry().Term
 	rf.DPrintf("[%d] start election, term = %d\n", rf.me, term)
 	rf.mu.Unlock()
+	// 阶段1：并发goroutine：RequestVote RPC
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
 			// 并发执行goroutine，发送requestVote RPC请求，且不得持有锁
@@ -466,7 +468,7 @@ func (rf *Raft) DoCandidateTask() {
 					LastLogTerm:  lastLogTerm,
 				}
 				reply := RequestVoteReply{}
-				rf.DPrintf()
+				rf.DPrintf("[%d] send RequestVote to server [%d]\n", rf.me, server)
 				// 发送失败，终止对应线程
 				if !rf.sendRequestVote(server, &args, &reply) {
 					rf.cond.Broadcast() // 唤醒rf.cond的goroutine
@@ -481,7 +483,7 @@ func (rf *Raft) DoCandidateTask() {
 				// 立刻转换为follower并重置超时
 				if reply.Term > rf.CurrentTerm {
 					rf.CurrentTerm = reply.Term
-					rf.State = FOLLOWER
+					rf.Role = FOLLOWER
 					rf.ElectionTimeout = GetElectionTimeout()
 					rf.persist()
 				}
@@ -489,6 +491,7 @@ func (rf *Raft) DoCandidateTask() {
 			}(i)
 		}
 	}
+	// 阶段2：goroutine超时唤醒
 	// 超时唤醒goroutine，并唤醒主线程提醒超时
 	var timeout rune
 	go func(electionTimeout int, timeout *rune) {
@@ -497,12 +500,45 @@ func (rf *Raft) DoCandidateTask() {
 		atomic.StoreInt32(timeout, 1)
 		rf.cond.Broadcast()
 	}(electionTimeout, &timeout)
-	
-	// 主线程判断选举是否结束
-	for {
 
+	// 阶段3：主线程循环判断选举是否结束
+	// 判断currentTerm, State, ifTimeout
+	var validateElectionState func() bool
+	validateElectionState = func() bool {
+		if rf.CurrentTerm == term &&
+			rf.Role == CANDIDATE &&
+			atomic.LoadInt32(&timeout) == 0 {
+			return true
+		}
+		return false
 	}
-	rf.DPrintf()
+	for {
+		rf.mu.Lock()
+		// 选举尚未结束
+		if votesGet <= len(rf.peers)/2 && validateElectionState() {
+			rf.cond.Wait() // 主线程睡眠
+		}
+		if !validateElectionState() {
+			rf.mu.Unlock()
+			break
+		}
+		// 成为leader
+		if votesGet > len(rf.peers)/2 {
+			rf.DPrintf("[%d] is voted as Leader, term is [%d]\n", rf.me, rf.CurrentTerm)
+			rf.Role = LEADER
+			// initialize leader's log state
+			rf.CommitIndex = 0
+			for i := 0; i < len(rf.peers); i++ {
+				rf.MatchIndex[i] = 0
+				rf.NextIndex[i] = rf.LastLogEntry().Index + 1
+			}
+			rf.mu.Unlock()
+			rf.TrySendEntries(true) // heartbeats
+			break
+		}
+		rf.mu.Unlock()
+	}
+	rf.DPrintf("Candidate [%d] finishes election", rf.me)
 }
 
 /*
@@ -543,7 +579,39 @@ func (rf *Raft) UpdateCommitIndex() {
 	rf.DPrintf("[%d] update CommitIndex, term = %d, NextIndex is %v, MatchIndex is %v, CommitIndex is %d", rf.me, rf.CurrentTerm, rf.NextIndex, rf.MatchIndex, rf.CommitIndex)
 }
 
-// 尝试发送日志条目，执行心跳rpc / 日志复制 / 快照复制
-func (rf *Raft) TrySendEntries(initialize bool) {}
+// 尝试执行心跳rpc / 日志复制 / 快照复制
+// initialize: 选上后的初次调用
+func (rf *Raft) TrySendEntries(initialize bool) {
+	for i := 0; i < len(rf.peers); i++ {
+		rf.mu.Lock()
+		nextIndex := rf.NextIndex[i]
+		firstLogIndex := rf.FirstLogEntry().Index
+		lastLogIndex := rf.LastLogEntry().Index
+		rf.mu.Unlock()
+		if i != rf.me {
+			// 成为leader后初次调用
+			// lastLogIndex >= nextIndex，说明本地有新的日志需要复制目标节firstLogIndex <= nextIndex点
+			if lastLogIndex >= nextIndex || initialize {
+				// 执行日志复制更新目标节点的日志状态
+				if firstLogIndex <= nextIndex {
+					go rf.SendEntries()
+				} else {
+					// 目标节点的日志落后到需要发送snapshot来更新状态
+					go rf.SendSnapshot()
+				}
+			} else {
+				// 没有日志要发送，就heartbeat
+				go rf.SendHeartbeat()
+			}
+		}
+	}
+}
 
+// heartbeat
+func (rf *Raft) SendHeartbeat() {}
+
+// 日志复制
 func (rf *Raft) SendEntries() {}
+
+// 快照复制
+func (rf *Raft) SendSnapshot() {}
