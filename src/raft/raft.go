@@ -246,9 +246,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if rf.VotedFor == -1 && ValidateLeader() {
 		reply.VoteGranted = true
 		rf.VotedFor = args.CandidateId
-		rf.persist()                              // 持久化保存
+		rf.persist() // 持久化保存
 		// 投票成功，重置选举超时，防止不符合的candidate阻塞潜在leader
-		rf.ElectionTimeout = GetElectionTimeout() 
+		rf.ElectionTimeout = GetElectionTimeout()
 		rf.DPrintf("[%d %d] vote for %d, term = %d", rf.me, rf.State, args.CandidateId, rf.CurrentTerm)
 	}
 	// rf.currentTerm == args.Term，直接结束
@@ -287,7 +287,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 func (rf *Raft) sendAppendEntries() {}
 
-func(rf *Raft) sendInstallSnapshot(){}
+func (rf *Raft) sendInstallSnapshot() {}
 
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -432,41 +432,54 @@ func (rf *Raft) DoFollowerTask() bool {
 }
 
 // leader election
+/*
+To begin an election, a follower increments its current
+term and transitions to candidate state. It then votes for
+itself and issues RequestVote RPCs in parallel to each of
+the other servers in the cluster. A candidate continues in
+this state until one of three things happens: (a) it wins the
+election, (b) another server establishes itself as leader, or
+(c) a period of time goes by with no winner. These out-
+comes are discussed separately in the paragraphs below.
+*/
 func (rf *Raft) DoCandidateTask() {
 	// prepare for election
 	rf.CurrentTerm++
-	votesGet := 1    // 得票数
+	votesGet := 1       // 得票数
 	rf.VotedFor = rf.me // 投票给自己
 	rf.persist()
 	rf.ElectionTimeout = GetElectionTimeout()
-	term:=rf.CurrentTerm
+	term := rf.CurrentTerm
+	electionTimeout := rf.ElectionTimeout
 	lastLogIndex := rf.LastLogEntry().Index
 	lastLogTerm := rf.LastLogEntry().Term
 	rf.DPrintf("[%d] start election, term = %d\n", rf.me, term)
 	rf.mu.Unlock()
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
-			go func(server int){
-				// rpc 填充
-				args:=RequestVoteArgs{
-					Term: term,
-					CandidateId: rf.me,
+			// 并发执行goroutine，发送requestVote RPC请求，且不得持有锁
+			go func(server int) {
+				args := RequestVoteArgs{
+					Term:         term,
+					CandidateId:  rf.me,
 					LastLogIndex: lastLogIndex,
-					LastLogTerm: lastLogTerm,
+					LastLogTerm:  lastLogTerm,
 				}
-				reply:=RequestVoteReply{}
+				reply := RequestVoteReply{}
 				rf.DPrintf()
-				// 发送rpc时不得持有锁，发送失败
-				if !rf.sendRequestVote(server, &args, &reply){
-					rf.cond.Broadcast() // 唤醒主线程
+				// 发送失败，终止对应线程
+				if !rf.sendRequestVote(server, &args, &reply) {
+					rf.cond.Broadcast() // 唤醒rf.cond的goroutine
 					return
 				}
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
-				if reply.VoteGranted{
+				// check 是否获得选票
+				if reply.VoteGranted {
 					votesGet++
 				}
-				if reply.Term > rf.CurrentTerm{
+				// 立刻转换为follower并重置超时
+				if reply.Term > rf.CurrentTerm {
 					rf.CurrentTerm = reply.Term
 					rf.State = FOLLOWER
 					rf.ElectionTimeout = GetElectionTimeout()
@@ -476,8 +489,16 @@ func (rf *Raft) DoCandidateTask() {
 			}(i)
 		}
 	}
+	// 超时唤醒goroutine，并唤醒主线程提醒超时
 	var timeout rune
-	go func(){}()
+	go func(electionTimeout int, timeout *rune) {
+		time.Sleep(time.Duration(electionTimeout) * time.Millisecond)
+		// 原子操作将timeout置为1，保证在多线程环境下安全操作共享变量
+		atomic.StoreInt32(timeout, 1)
+		rf.cond.Broadcast()
+	}(electionTimeout, &timeout)
+	
+	// 主线程判断选举是否结束
 	for {
 
 	}
