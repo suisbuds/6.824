@@ -198,10 +198,10 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
-	// 用于优化重传
-	XTerm  int
-	XIndex int
-	XLen   int
+	// conflict entry
+	XTerm  int // term in the conflicting entry
+	XIndex int // index of first entry with XTerm
+	XLen   int // length of the conflicting entry
 }
 
 // snapshot RPC
@@ -252,7 +252,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.ElectionTimeout = GetElectionTimeout()
 		rf.DPrintf("[%d %d] vote for %d, term = %d", rf.me, rf.Role, args.CandidateId, rf.CurrentTerm)
 	}
-	// rf.currentTerm == args.Term，直接结束
+	// if rf.currentTerm == args.Term，直接结束
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -286,9 +286,15 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
-func (rf *Raft) sendAppendEntries() {}
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
 
-func (rf *Raft) sendInstallSnapshot() {}
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
+	return ok
+}
 
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -590,17 +596,17 @@ func (rf *Raft) TrySendEntries(initialize bool) {
 		rf.mu.Unlock()
 		if i != rf.me {
 			// 成为leader后初次调用
-			// lastLogIndex >= nextIndex，说明本地有新的日志需要复制目标节firstLogIndex <= nextIndex点
+			// lastLogIndex >= nextIndex，说明本地有新的日志需要复制到目标节点
 			if lastLogIndex >= nextIndex || initialize {
 				// 执行日志复制更新目标节点的日志状态
 				if firstLogIndex <= nextIndex {
-					go rf.SendEntries()
+					go rf.SendEntries(i)
 				} else {
-					// 目标节点的日志落后到需要发送snapshot来更新状态
+					// 目标节点的日志远远落后，需要发送snapshot来更新状态
 					go rf.SendSnapshot()
 				}
 			} else {
-				// 没有日志要发送，就heartbeat
+				// 没有日志要发送，就heartbeat保活
 				go rf.SendHeartbeat()
 			}
 		}
@@ -611,7 +617,92 @@ func (rf *Raft) TrySendEntries(initialize bool) {
 func (rf *Raft) SendHeartbeat() {}
 
 // 日志复制
-func (rf *Raft) SendEntries() {}
+/*
+The consistency check acts as an induction
+step: the initial empty state of the logs satisfies the Log
+Matching Property, and the consistency check preserves
+the Log Matching Property whenever logs are extended.
+As a result, whenever AppendEntries returns successfully,
+the leader knows that the follower’s log is identical to its
+own log up through the new entries.
+*/
+
+func (rf *Raft) SendEntries(server int) {
+	finish := false
+	// 判断当前是否仍未leader,以及有无新的日志需要发送
+	for !finish {
+		rf.mu.Lock()
+		if rf.Role != LEADER {
+			rf.mu.Unlock()
+			return
+		}
+		if rf.NextIndex[server] <= rf.LastIncludedIndex {
+			rf.mu.Unlock()
+			return
+		}
+		finish = true
+		currentTerm := rf.CurrentTerm
+		leaderCommit := rf.CommitIndex
+		prevLogIndex := rf.NextIndex[server] - 1
+		prevLogTerm := rf.GetLogIndex(prevLogIndex).Term
+		// 需要发送的日志
+		entries := rf.Log[prevLogIndex-rf.LastIncludedIndex+1:]
+		rf.DPrintf()
+		rf.mu.Unlock()
+		args := AppendEntriesArgs{
+			Term:         currentTerm,
+			LeaderId:     rf.me,
+			PrevLogIndex: prevLogIndex,
+			PrevLogTerm:  prevLogTerm,
+			Entries:      entries,
+			LeaderCommit: leaderCommit}
+		reply := AppendEntriesReply{}
+		//  try appendEntries rpc
+		if !rf.sendAppendEntries(server, &args, &reply) {
+			return
+		}
+		rf.mu.Lock()
+		// when try to send entries and find a larger term
+		// current peer convert to follower and update term equal to candidate's term
+		if reply.Term > rf.CurrentTerm {
+			rf.CurrentTerm = reply.Term
+			rf.Role = FOLLOWER
+			rf.ElectionTimeout = GetElectionTimeout()
+			rf.VotedFor = -1 // reset vote
+			rf.persist()
+			rf.mu.Unlock()
+			return
+		}
+		// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
+		if !reply.Success {
+			// case 1: follower's log is too short
+			if reply.XLen < prevLogIndex {
+				rf.NextIndex[server] = Max(reply.XLen, 1) // prevent nextIndex < 0
+			} else {
+				newNextIndex := prevLogIndex
+				for newNextIndex > rf.LastIncludedIndex &&
+					rf.GetLogIndex(newNextIndex).Term > reply.XTerm {
+					newNextIndex--
+				}
+				//  case 2: leader has xTerm 
+				if rf.GetLogIndex(newNextIndex).Term == reply.XTerm {
+					rf.NextIndex[server] = Max(newNextIndex, rf.LastIncludedIndex+1)
+				} else {
+					// case 3: leader dont have xTerm
+					rf.NextIndex[server] = reply.XIndex
+				}
+			}
+			rf.DPrintf()
+			finish = false
+		} else {
+			// appendEntries success
+			rf.NextIndex[server] = Max(rf.NextIndex[server], prevLogIndex+len(entries)+1)
+			rf.MatchIndex[server] = Max(rf.MatchIndex[server], prevLogIndex+len(entries))
+			rf.DPrintf()
+		}
+		rf.mu.Unlock()
+	}
+}
 
 // 快照复制
 func (rf *Raft) SendSnapshot() {}
