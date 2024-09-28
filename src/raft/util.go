@@ -37,7 +37,7 @@ func GetElectionTimeout() int {
 	return ELECTION_TIMEOUT_BASE + int(rand.Int31n(ELECTION_TIMEOUT_RANGE))
 }
 
-func (rf *Raft) GetLogIndex(index int) LogEntry {
+func (rf *Raft) GetLogEntry(index int) LogEntry {
 	// 要考虑被日志压缩的条目
 	if index == 0 {
 		return LogEntry{Term: -1, Index: 0}

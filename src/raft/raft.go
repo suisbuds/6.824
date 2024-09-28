@@ -216,20 +216,20 @@ type InstallSnapshotReply struct{}
 2. If votedFor is null or candidateId, and candidate’s log is at
 	least as up-to-date as receiver’s log, grant vote
 */
+// Invoked by candidates to gather votes
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
-	// rf.DPrintf("[%d] Get RequestVote from %d", rf.me, args.CandidateId)
 	defer rf.mu.Unlock()
 	reply.Term = rf.CurrentTerm
 	LastIndex := rf.LastLogEntry().Index
 	LastTerm := rf.LastLogEntry().Term
-	// term>candidate's term, 拒绝投票
+	// term > candidate's term, 拒绝投票
 	if rf.CurrentTerm > args.Term {
 		reply.VoteGranted = false
 		return
 	} else if rf.CurrentTerm < args.Term {
-		// convert to follower
+		// term < candidate's term, convert to follower
 		rf.Role = FOLLOWER
 		rf.CurrentTerm = args.Term // candidate's term
 		rf.VotedFor = -1           // 重置选票，中间状态
@@ -243,6 +243,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		}
 		return false
 	}
+	// if rf.currentTerm == args.Term，直接结束
 	// 检查选票是否存在
 	if rf.VotedFor == -1 && ValidateLeader() {
 		reply.VoteGranted = true
@@ -252,8 +253,85 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.ElectionTimeout = GetElectionTimeout()
 		rf.DPrintf("[%d %d] vote for %d, term = %d", rf.me, rf.Role, args.CandidateId, rf.CurrentTerm)
 	}
-	// if rf.currentTerm == args.Term，直接结束
+
 }
+
+// RPC handler
+// Invoked by leader to replicate log entries; also used as heartbeat
+/*
+1. Reply false if term < currentTerm
+2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
+3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
+4. Append any new entries not already in the log
+5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+*/
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	// State 1: reset election timeout, prevent from election while having leader
+	rf.DPrintf("[%d-%d] Get AppendEntries from leader [%d], LastIncludeIndex = %d, CurrentTerm = %d, PrevLogIndex = %d, PrevLogTerm = %d, LeaderTerm = %d)\n",
+		rf.me, rf.Role, args.LeaderId, rf.LastIncludedIndex, rf.CurrentTerm, args.PrevLogIndex, args.PrevLogTerm, args.Term)
+	reply.Term = rf.CurrentTerm
+	rf.ElectionTimeout = GetElectionTimeout()
+	// State 2: 发送方的term小于接收方的term；发送方prevLogIndex处的日志条目已经被接收方压缩删除
+	// 如果是后者，XLen=0，sendEntries中NextIndex将被设定为Max(0,1)即1，并在下次TrySendEntries中发送快照
+	if args.Term < rf.CurrentTerm || rf.LastIncludedIndex > args.PrevLogIndex {
+		reply.Success = false
+		return
+	}
+	// State 3: reply find potential leader, update term and convert to follower
+	if rf.CurrentTerm < args.Term || rf.Role != CANDIDATE {
+		reply.Success = true
+		rf.Role = FOLLOWER
+		rf.CurrentTerm = args.Term
+		rf.VotedFor = -1    // reset vote, dont vote anymore
+		rf.cond.Broadcast() // 唤醒election thread
+		rf.persist()
+	}
+	// State 4: replier log inconsistency, fill in XTerm, XIndex, XLen and retry
+	if rf.LastLogEntry().Index < args.PrevLogIndex || rf.GetLogEntry(args.PrevLogIndex).Term != args.PrevLogTerm {
+		reply.XLen = rf.LastLogEntry().Index
+		if rf.LastLogEntry().Index >= args.PrevLogIndex {
+			reply.XTerm = rf.GetLogEntry(args.PrevLogIndex).Term
+			reply.XIndex = args.PrevLogIndex
+			// 向前搜索寻找!=Xterm的日志条目
+			for reply.XIndex > rf.LastIncludedIndex && rf.GetLogEntry(reply.XIndex).Term == reply.XTerm {
+				reply.XIndex--
+			}
+			// 找到第一个不匹配的日志索引
+			reply.XIndex += 1
+		}
+		rf.DPrintf("[%d-%d] AppendEntries fail because of inconsistency, XLen = %d, XTerm = %d, XIndex = %d", rf.me, rf.Role, reply.XLen, reply.XTerm, reply.XIndex)
+		reply.Success = false
+		return
+	}
+	// State 5: pass log consistency check, merge sender's log with local log
+	// 1. 发送方日志为本地日志子集，不作处理
+	// 2. 不重合时，将本地日志置为发送方日志
+	// 3. 特殊情况：发送方连续发送不同长度的日志，且短日志更晚到达，此时不能将本地日志置为发送方日志，会使本地日志回退（日志只能递增）
+	reply.Success = true
+	for index, entry := range args.Entries {
+		// 日志不重合
+		if rf.LastLogEntry().Index < entry.Index ||
+			entry.Term != rf.GetLogEntry(entry.Index).Term {
+			var log []LogEntry
+			for i := rf.LastIncludedIndex + 1; i < entry.Index; i++ {
+				log = append(log, rf.GetLogEntry(i))
+			}
+			log = append(log, args.Entries[index:]...)
+			rf.Log = log
+			rf.persist()
+			rf.DPrintf("[%d-%d] Append new log %v", rf.me, rf.Role, rf.Log)
+		}
+	}
+	// State 6: update commitIndex
+	if args.LeaderCommit > rf.CommitIndex {
+		rf.CommitIndex = Min(args.LeaderCommit, rf.LastLogEntry().Index)
+		rf.DPrintf("[%d-%d] CommitIndex update to %d\n", rf.me, rf.Role, rf.CommitIndex)
+	}
+}
+
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {}
 
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
@@ -628,26 +706,28 @@ own log up through the new entries.
 */
 
 func (rf *Raft) SendEntries(server int) {
-	finish := false
-	// 判断当前是否仍未leader,以及有无新的日志需要发送
+	finish := false // if send entries finish
+	// 判断当前是否仍未leader
 	for !finish {
 		rf.mu.Lock()
 		if rf.Role != LEADER {
 			rf.mu.Unlock()
 			return
 		}
+		// 无需要发送的新日志
 		if rf.NextIndex[server] <= rf.LastIncludedIndex {
 			rf.mu.Unlock()
 			return
 		}
-		finish = true
 		currentTerm := rf.CurrentTerm
 		leaderCommit := rf.CommitIndex
 		prevLogIndex := rf.NextIndex[server] - 1
-		prevLogTerm := rf.GetLogIndex(prevLogIndex).Term
+		prevLogTerm := rf.GetLogEntry(prevLogIndex).Term
 		// 需要发送的日志
 		entries := rf.Log[prevLogIndex-rf.LastIncludedIndex+1:]
-		rf.DPrintf()
+		rf.DPrintf("[%d] send entries to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]\n",
+			rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
+		finish = true // start appendEntries rpc
 		rf.mu.Unlock()
 		args := AppendEntriesArgs{
 			Term:         currentTerm,
@@ -662,7 +742,7 @@ func (rf *Raft) SendEntries(server int) {
 			return
 		}
 		rf.mu.Lock()
-		// when try to send entries and find a larger term
+		// RPC CONDITION 1: found a larger term
 		// current peer convert to follower and update term equal to candidate's term
 		if reply.Term > rf.CurrentTerm {
 			rf.CurrentTerm = reply.Term
@@ -673,6 +753,7 @@ func (rf *Raft) SendEntries(server int) {
 			rf.mu.Unlock()
 			return
 		}
+		// RPC CONDITION 2: log inconsistency
 		// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
 		if !reply.Success {
 			// case 1: follower's log is too short
@@ -680,25 +761,30 @@ func (rf *Raft) SendEntries(server int) {
 				rf.NextIndex[server] = Max(reply.XLen, 1) // prevent nextIndex < 0
 			} else {
 				newNextIndex := prevLogIndex
+				// 向前搜索匹配的日志条目
 				for newNextIndex > rf.LastIncludedIndex &&
-					rf.GetLogIndex(newNextIndex).Term > reply.XTerm {
+					rf.GetLogEntry(newNextIndex).Term > reply.XTerm {
 					newNextIndex--
 				}
-				//  case 2: leader has xTerm 
-				if rf.GetLogIndex(newNextIndex).Term == reply.XTerm {
+				//  case 2: leader has xTerm
+				if rf.GetLogEntry(newNextIndex).Term == reply.XTerm {
+					// 防止回退到snapshot之前的日志
 					rf.NextIndex[server] = Max(newNextIndex, rf.LastIncludedIndex+1)
 				} else {
 					// case 3: leader dont have xTerm
+					// help leader can quick find follower expected log
 					rf.NextIndex[server] = reply.XIndex
 				}
 			}
-			rf.DPrintf()
-			finish = false
+			rf.DPrintf("[%d] send entires, rf.NextIndex[%d] update to %d", rf.me, server, rf.NextIndex[server])
+			finish = false // rpc failed, retry
 		} else {
-			// appendEntries success
+			// RPC CONDITION 3: appendEntries success
+			// 发送方连续发送不同长度日志的AppendEntries，且短日志更晚到达，
+			// 利用Max使得NextIndex及MatchIndex单调增长，同时忽略短日志
 			rf.NextIndex[server] = Max(rf.NextIndex[server], prevLogIndex+len(entries)+1)
 			rf.MatchIndex[server] = Max(rf.MatchIndex[server], prevLogIndex+len(entries))
-			rf.DPrintf()
+			rf.DPrintf("[%d] appendEntries success, NextIndex is %v, MatchIndex is %v", rf.me, rf.NextIndex, rf.MatchIndex)
 		}
 		rf.mu.Unlock()
 	}
