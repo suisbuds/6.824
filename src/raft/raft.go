@@ -97,20 +97,19 @@ type Raft struct {
 	LastIncludedTerm  int // 快照压缩替换掉的索引的term
 }
 
-// return currentTerm and whether this server
-// believes it is the leader.
+// return currentTerm and whether this server believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	if rf.killed() {
 		return FAILED, false
 	}
-	var term int
-	var isleader bool
 	// Your code here (2A).
 	rf.mu.Lock()
+	var term int
+	var isLeader bool	
 	term = rf.CurrentTerm
-	isleader = rf.Role == LEADER
+	isLeader = rf.Role == LEADER
 	rf.mu.Unlock()
-	return term, isleader
+	return term, isLeader
 }
 
 // save Raft's persistent state to stable storage,
@@ -393,7 +392,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// 请求失败
 	_, isLeader := rf.GetState()
 	if !isLeader || rf.killed() {
-		rf.DPrintf("[%d] Start() Fail isleader = %t, isKilled = %t", rf.me, isLeader, rf.killed())
+		rf.DPrintf("[%d] Start() Fail isLeader = %t, isKilled = %t", rf.me, isLeader, rf.killed())
 		return -1, -1, false
 	}
 
@@ -423,7 +422,7 @@ func (rf *Raft) killed() bool {
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
-// heartsbeats recently.
+// heartsBeats recently.
 func (rf *Raft) ticker() {
 	// 无限执行raft集群任务
 	for rf.killed() == false {
@@ -627,8 +626,7 @@ func (rf *Raft) DoCandidateTask() {
 }
 
 /*
-If commitIndex > lastApplied: increment lastApplied, apply
-log[lastApplied] to state machine
+If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
 */
 func (rf *Raft) UpdateLastApplied() {
 
@@ -770,7 +768,7 @@ func (rf *Raft) SendEntries(server int) {
 	// sendEntries loop
 	for !finish {
 		rf.mu.Lock()
-		// 判断当前是否仍未leader
+		// 判断当前是否仍为leader
 		if rf.Role != LEADER {
 			rf.mu.Unlock()
 			return
