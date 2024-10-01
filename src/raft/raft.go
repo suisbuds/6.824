@@ -446,6 +446,7 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 		rf.UpdateLastApplied()
+		// role需要加锁，可能会被多个Goroutine访问
 		rf.mu.Lock()
 		role := rf.Role
 		rf.mu.Unlock()
@@ -648,26 +649,25 @@ If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to s
 1. 检查LastApplied<CommitIndex
 2. 以ApplyMsg形式发送到rf.applych
 3.应用log[LastApplied]到state machine
-4.update LastApplied
+4. update LastApplied
 */
 func (rf *Raft) UpdateLastApplied() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.LastApplied = Max(rf.LastApplied, rf.LastIncludedIndex)
-	for rf.LastApplied < rf.CommitIndex && rf.LastApplied < rf.LastLogEntry().Index {
-		if rf.LastApplied >= rf.LastIncludedIndex {
-			// 应用LastApplied+1的日志
-			msg := ApplyMsg{
-				CommandValid: true,
-				Command:      rf.GetLogEntry(rf.LastApplied + 1).Command,
-				CommandIndex: rf.LastApplied + 1,
-			}
-			rf.mu.Unlock()
-			rf.applyCh <- msg
-			rf.mu.Lock()
-			// rf.DPrintf()
-			rf.LastApplied++
+	// 防止发送被日志压缩删除的条目：LastApplied >= LastIncludedIndex
+	for rf.LastApplied < rf.CommitIndex && rf.LastApplied < rf.LastLogEntry().Index && rf.LastApplied >= rf.LastIncludedIndex {
+		// 应用LastApplied+1的日志
+		msg := ApplyMsg{
+			CommandValid: true,
+			Command:      rf.GetLogEntry(rf.LastApplied + 1).Command,
+			CommandIndex: rf.LastApplied + 1,
 		}
+		rf.mu.Unlock()
+		rf.applyCh <- msg
+		rf.mu.Lock()
+		rf.DPrintf("[%d] apply msg [%d] success", rf.me, rf.LastApplied+1)
+		rf.LastApplied++
 	}
 }
 
