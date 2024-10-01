@@ -53,9 +53,9 @@ const (
 	LEADER                 = 1
 	CANDIDATE              = 2
 	FOLLOWER               = 3
-	BROADCAST_TIME         = 100  // 限制为每秒十次心跳
-	ELECTION_TIMEOUT_BASE  = 1000 // broadcastTime ≪ electionTimeout ≪ MTBF
-	ELECTION_TIMEOUT_RANGE = 1000
+	BROADCAST_TIME         = 100 // 限制为每秒十次心跳
+	ELECTION_TIMEOUT_BASE  = 250 // broadcastTime ≪ electionTimeout ≪ MTBF
+	ELECTION_TIMEOUT_RANGE = 250
 )
 
 type LogEntry struct {
@@ -72,9 +72,9 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	applych chan ApplyMsg // channel,用于发送提交的日志
-	cond    *sync.Cond    // 唤醒线程
-	// quickCheck rune
+	applyCh      chan ApplyMsg // 用于发送提交日志的channel
+	cond         *sync.Cond    // 唤醒线程
+	quicklyCheck int32         // 用于检查leaderTask的标志位
 	// name string
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -105,7 +105,7 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	rf.mu.Lock()
 	var term int
-	var isLeader bool	
+	var isLeader bool
 	term = rf.CurrentTerm
 	isLeader = rf.Role == LEADER
 	rf.mu.Unlock()
@@ -385,20 +385,36 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
-// 客户端向Raft服务器发送命令，创建日志条目并插入本地日志
+// 客户端向Raft服务器发送命令command
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	// 请求失败
+
 	_, isLeader := rf.GetState()
+	// 不是leader无法Start
 	if !isLeader || rf.killed() {
 		rf.DPrintf("[%d] Start() Fail isLeader = %t, isKilled = %t", rf.me, isLeader, rf.killed())
 		return -1, -1, false
 	}
 
 	// Your code here (2B).
+	// leader创建日志条目并向所有节点插入日志
+	rf.mu.Lock()
 
-	return index, term, true
+	logEntry := LogEntry{
+		Command: command,
+		Term:    rf.CurrentTerm,
+		Index:   rf.LastLogEntry().Index + 1,
+	}
+	rf.Log = append(rf.Log, logEntry)
+	rf.persist()
+	rf.mu.Unlock()
+	rf.DPrintf("[%d] Start(), index [%d], term [%d], command is %d", rf.me, logEntry.Index, logEntry.Term, logEntry.Command)
+	atomic.StoreInt32(&rf.quicklyCheck, 20) // initialize quicklyCheck to 20
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			go rf.SendEntries(i)
+		}
+	}
+	return logEntry.Index, logEntry.Term, isLeader
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -429,9 +445,10 @@ func (rf *Raft) ticker() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-		rf.mu.Lock()
 		rf.UpdateLastApplied()
+		rf.mu.Lock()
 		role := rf.Role
+		rf.mu.Unlock()
 		// 在任务函数中处理完元数据 / 在耗时操作前 记得解锁，防止死锁
 		switch role {
 		case LEADER:
@@ -443,9 +460,8 @@ func (rf *Raft) ticker() {
 				continue // 转换为candidate
 			}
 		default:
-			rf.mu.Unlock()
+			// rf.mu.Unlock()
 		}
-
 	}
 }
 
@@ -467,7 +483,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-	rf.applych = applyCh
+	rf.applyCh = applyCh
 	rf.cond = sync.NewCond(&rf.mu)
 	rf.DPrintf("[%d] is Making, len(peers) = %d\n", me, len(peers))
 
@@ -476,7 +492,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.ElectionTimeout = GetElectionTimeout() // 初始化，随机选举超时
 	rf.Role = FOLLOWER                        // 初始化为follower
 	rf.CurrentTerm = 0
-	rf.VotedFor = -1 // 未投票
+	rf.VotedFor = -1 // 未投票状态
 	rf.MatchIndex = make([]int, len(peers))
 	rf.NextIndex = make([]int, len(peers))
 
@@ -494,13 +510,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 // 自定义函数
 
 func (rf *Raft) DoLeaderTask() {
-	rf.mu.Unlock()
+	// rf.mu.Unlock()
 	rf.TrySendEntries(false) // false代表是否为leader第一次调用该函数
 	rf.UpdateCommitIndex()
 	time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond) // 睡眠，实现心跳间隔
 }
 
 func (rf *Raft) DoFollowerTask() bool {
+	rf.mu.Lock()
 	rf.DPrintf("[%d] 's ElectionTimeout = %d\n", rf.me, rf.ElectionTimeout)
 	// 检查是否即将超时，electionTimeout<100ms
 	if rf.ElectionTimeout < rf.BroadcastTime {
@@ -529,6 +546,7 @@ comes are discussed separately in the paragraphs below.
 */
 func (rf *Raft) DoCandidateTask() {
 	// prepare for election
+	rf.mu.Lock()
 	rf.CurrentTerm++
 	votesGet := 1       // 得票数
 	rf.VotedFor = rf.me // 投票给自己
@@ -627,9 +645,30 @@ func (rf *Raft) DoCandidateTask() {
 
 /*
 If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
+1. 检查LastApplied<CommitIndex
+2. 以ApplyMsg形式发送到rf.applych
+3.应用log[LastApplied]到state machine
+4.update LastApplied
 */
 func (rf *Raft) UpdateLastApplied() {
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.LastApplied = Max(rf.LastApplied, rf.LastIncludedIndex)
+	for rf.LastApplied < rf.CommitIndex && rf.LastApplied < rf.LastLogEntry().Index {
+		if rf.LastApplied >= rf.LastIncludedIndex {
+			// 应用LastApplied+1的日志
+			msg := ApplyMsg{
+				CommandValid: true,
+				Command:      rf.GetLogEntry(rf.LastApplied + 1).Command,
+				CommandIndex: rf.LastApplied + 1,
+			}
+			rf.mu.Unlock()
+			rf.applyCh <- msg
+			rf.mu.Lock()
+			// rf.DPrintf()
+			rf.LastApplied++
+		}
+	}
 }
 
 /*
@@ -763,7 +802,7 @@ own log up through the new entries.
 */
 
 func (rf *Raft) SendEntries(server int) {
-	finish := false 
+	finish := false
 
 	// sendEntries loop
 	for !finish {
