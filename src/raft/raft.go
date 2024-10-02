@@ -72,9 +72,10 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	applyCh      chan ApplyMsg // 用于发送提交日志的channel
-	cond         *sync.Cond    // 唤醒线程
-	quicklyCheck int32         // 用于检查leaderTask的标志位
+	applyCh chan ApplyMsg // 用于发送提交日志的channel
+	cond    *sync.Cond    // 唤醒线程
+	// 当leader开始处理日志时，快速检查是否有新日志需要提交，加速CommitIndex的更新，提高日志提交的及时性
+	quickCommitCheck int32
 	// name string
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -396,7 +397,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	// Your code here (2B).
-	// leader创建日志条目并向所有节点插入日志
+	// leader创建日志条目并通过心跳通知所有follower写入日志
 	rf.mu.Lock()
 
 	logEntry := LogEntry{
@@ -408,10 +409,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.persist()
 	rf.mu.Unlock()
 	rf.DPrintf("[%d] Start(), index [%d], term [%d], command is %d", rf.me, logEntry.Index, logEntry.Term, logEntry.Command)
-	atomic.StoreInt32(&rf.quicklyCheck, 20) // initialize quicklyCheck to 20
+	// leader一开始要更频繁地发送日志条目 / 心跳
+	atomic.StoreInt32(&rf.quickCommitCheck, 20)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
-			go rf.SendEntries(i)
+			go rf.SendEntries(i, true)
 		}
 	}
 	return logEntry.Index, logEntry.Term, isLeader
@@ -455,10 +457,10 @@ func (rf *Raft) ticker() {
 		case LEADER:
 			rf.DoLeaderTask()
 		case CANDIDATE:
-			rf.DoCandidateTask()
+			rf.DoCandidateTask() // candidate to follower or leader or election timeout
 		case FOLLOWER:
 			if rf.DoFollowerTask() {
-				continue // 转换为candidate
+				continue // follower to candidate
 			}
 		default:
 			// rf.mu.Unlock()
@@ -508,13 +510,29 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-// 自定义函数
+/*
+* Customized Functions
+*
+ */
 
 func (rf *Raft) DoLeaderTask() {
-	// rf.mu.Unlock()
-	rf.TrySendEntries(false) // false代表是否为leader第一次调用该函数
-	rf.UpdateCommitIndex()
-	time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond) // 睡眠，实现心跳间隔
+	// atomic operation, don't need to add lock
+	/*
+		1. 初始阶段快速提交
+			一开始leader需要更频繁地发送日志条目 / 心跳，确保日志尽快复制到大多数followers
+		2. 稳定阶段正常提交
+			当日志被大多数follower复制时，leader恢复到正常心跳频率
+		3. quickCommitCheck只能递减，因为只有初期才需要
+	*/
+	if atomic.LoadInt32(&rf.quickCommitCheck) > 0 {
+		rf.UpdateCommitIndex()
+		atomic.AddInt32(&rf.quickCommitCheck, -1)
+		time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond)
+	} else {
+		rf.TrySendEntries(false) // false代表是否为leader第一次发送日志
+		rf.UpdateCommitIndex()
+		time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond) // 强制睡眠，实现心跳间隔
+	}
 }
 
 func (rf *Raft) DoFollowerTask() bool {
@@ -534,17 +552,16 @@ func (rf *Raft) DoFollowerTask() bool {
 	return false
 }
 
-// leader election
 /*
-To begin an election, a follower increments its current
-term and transitions to candidate state. It then votes for
-itself and issues RequestVote RPCs in parallel to each of
-the other servers in the cluster. A candidate continues in
-this state until one of three things happens: (a) it wins the
-election, (b) another server establishes itself as leader, or
-(c) a period of time goes by with no winner. These out-
-comes are discussed separately in the paragraphs below.
-*/
+* To begin an election, a follower increments its current
+* term and transitions to candidate state. It then votes for
+* itself and issues RequestVote RPCs in parallel to each of
+* the other servers in the cluster. A candidate continues in
+* this state until one of three things happens: (a) it wins the
+* election, (b) another server establishes itself as leader, or
+* (c) a period of time goes by with no winner. These out-
+* comes are discussed separately in the paragraphs below.
+ */
 func (rf *Raft) DoCandidateTask() {
 	// prepare for election
 	rf.mu.Lock()
@@ -672,10 +689,10 @@ func (rf *Raft) UpdateLastApplied() {
 }
 
 /*
-If there exists an N such that N > commitIndex, a majority
-of matchIndex[i] ≥ N, and log[N].term == currentTerm:
-set commitIndex = N
-*/
+* If there exists an N such that N > commitIndex, a majority
+* of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+* set commitIndex = N
+ */
 func (rf *Raft) UpdateCommitIndex() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -696,13 +713,13 @@ func (rf *Raft) UpdateCommitIndex() {
 			}
 		}
 	}
-	// 新的需要提交的日志
+	// 新的提交日志
 	rf.CommitIndex = newCommitIndex
 	rf.DPrintf("[%d] update CommitIndex, term = %d, NextIndex is %v, MatchIndex is %v, CommitIndex is %d", rf.me, rf.CurrentTerm, rf.NextIndex, rf.MatchIndex, rf.CommitIndex)
 }
 
 // 尝试执行心跳rpc / 日志复制 / 快照复制
-// initialize: 选上后的初次调用
+// initialize: 成为leader后初次调用
 func (rf *Raft) TrySendEntries(initialize bool) {
 	for i := 0; i < len(rf.peers); i++ {
 		rf.mu.Lock()
@@ -711,63 +728,186 @@ func (rf *Raft) TrySendEntries(initialize bool) {
 		lastLogIndex := rf.LastLogEntry().Index
 		rf.mu.Unlock()
 		if i != rf.me {
-			// 成为leader后初次调用
-			// lastLogIndex >= nextIndex，说明本地有新的日志需要复制到目标节点
+			// 成为leader后首次调用
+			// lastLogIndex >= nextIndex，说明本地有新日志需要复制到目标节点
 			if lastLogIndex >= nextIndex || initialize {
-				// 执行日志复制更新目标节点的日志状态
+				// SendEntries更新目标节点
 				if firstLogIndex <= nextIndex {
-					go rf.SendEntries(i)
+					go rf.SendEntries(i, true)
 				} else {
-					// 目标节点的日志远远落后，需要发送snapshot来更新状态
+					// 目标节点的日志远远落后，需要SendSnapshot更新
 					go rf.SendSnapshot(i)
 				}
 			} else {
-				// 没有日志要发送，就heartbeat保活
-				go rf.SendHeartbeat(i)
+				// heartbeat保活
+				go rf.SendEntries(i, false)
 			}
 		}
 	}
 }
 
-// heartbeat, similar to sendEntries, but not need to fill in entries and wait for reply.success
-// in fact, it is a special case of sendEntries
+/*
+* The consistency check acts as an induction
+* step: the initial empty state of the logs satisfies the Log
+* Matching Property, and the consistency check preserves
+* the Log Matching Property whenever logs are extended.
+* As a result, whenever AppendEntries returns successfully,
+* the leader knows that the follower’s log is identical to its
+* own log up through the new entries.
+*
+* In Lab2, heartbeat is similar to sendEntries, but not need to fill in entries and wait for reply.success
+* In fact, it is a special case of sendEntries, so we can use sendEntries to implement heartbeat
+* newEntriesFlag: true means sendEntries, false means heartbeat
+ */
+func (rf *Raft) SendEntries(server int, newEntriesFlag bool) {
+	finish := false
+	// sendEntries loop or send one heartbeat
+	for !finish {
+		rf.mu.Lock()
+		// 判断当前是否仍为leader
+		if rf.Role != LEADER {
+			rf.mu.Unlock()
+			return
+		}
+		// 无需要发送的新日志
+		if rf.NextIndex[server] <= rf.LastIncludedIndex {
+			rf.mu.Unlock()
+			return
+		}
+		currentTerm := rf.CurrentTerm
+		leaderCommit := rf.CommitIndex
+		prevLogIndex := rf.NextIndex[server] - 1
+		prevLogTerm := rf.GetLogEntry(prevLogIndex).Term
+		entries := rf.Log[prevLogIndex-rf.LastIncludedIndex:]
+		var args AppendEntriesArgs
+		var reply AppendEntriesReply
+		if newEntriesFlag {
+			args = AppendEntriesArgs{
+				Term:         currentTerm,
+				LeaderId:     rf.me,
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  prevLogTerm,
+				Entries:      entries,
+				LeaderCommit: leaderCommit}
+			reply = AppendEntriesReply{}
+			rf.DPrintf("[%d] send entries to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]\n",
+				rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
+		} else {
+			// 无需发送日志，所以不用填充entry
+			args = AppendEntriesArgs{
+				Term:         currentTerm,
+				LeaderId:     rf.me,
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  prevLogTerm,
+				LeaderCommit: leaderCommit}
+			reply = AppendEntriesReply{}
+			rf.DPrintf("[%d] send heartBeat to server [%d]\n", rf.me, server)
+		}
+		finish = true // start appendEntries rpc
+		rf.mu.Unlock()
+		//  try appendEntries rpc
+		if !rf.sendAppendEntries(server, &args, &reply) {
+			return
+		}
+		rf.mu.Lock()
+		// RPC STATE 1: found a larger term
+		// current peer convert to follower and update term equal to candidate's term
+		if reply.Term > rf.CurrentTerm {
+			rf.CurrentTerm = reply.Term
+			rf.Role = FOLLOWER
+			rf.VotedFor = -1 // reset vote
+			rf.ElectionTimeout = GetElectionTimeout()
+			rf.persist()
+			rf.mu.Unlock()
+			return
+		}
+		// RPC STATE 2: log inconsistency
+		// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
+		if !reply.Success {
+			// case 1: follower's log is too short
+			if reply.XLen < prevLogIndex {
+				rf.NextIndex[server] = Max(reply.XLen, 1) // prevent nextIndex < 0
+			} else {
+				newNextIndex := prevLogIndex
+				// 向前搜索匹配的日志条目
+				for newNextIndex > rf.LastIncludedIndex &&
+					rf.GetLogEntry(newNextIndex).Term > reply.XTerm {
+					newNextIndex--
+				}
+				//  case 2: leader has xTerm
+				if rf.GetLogEntry(newNextIndex).Term == reply.XTerm {
+					// 防止回退到snapshot之前的日志
+					rf.NextIndex[server] = Max(newNextIndex, rf.LastIncludedIndex+1)
+				} else {
+					// case 3: leader don't have xTerm
+					// help leader can quick find follower expected log
+					rf.NextIndex[server] = reply.XIndex
+				}
+			}
+			rf.DPrintf("[%d] send entires, rf.NextIndex[%d] update to %d", rf.me, server, rf.NextIndex[server])
+			finish = false // rpc failed, retry
+			if !newEntriesFlag {
+				// Heartbeat don't need to wait for reply.success, break directly
+				rf.mu.Unlock()
+				break
+			}
+		} else {
+			// RPC STATE 3: appendEntries success
+			// 发送方连续发送不同长度日志的AppendEntries，且短日志更晚到达，
+			// 利用Max使得NextIndex及MatchIndex单调增长，同时忽略短日志
+			rf.NextIndex[server] = Max(rf.NextIndex[server], prevLogIndex+len(entries)+1)
+			rf.MatchIndex[server] = Max(rf.MatchIndex[server], prevLogIndex+len(entries))
+			rf.DPrintf("[%d] appendEntries success, NextIndex is %v, MatchIndex is %v", rf.me, rf.NextIndex, rf.MatchIndex)
+		}
+		rf.mu.Unlock()
+	}
+}
+
+// 快照复制
+func (rf *Raft) SendSnapshot(server int) {}
+
+/*
+* @suisbuds
+* Deprecated function
+--------------------------------
+
 func (rf *Raft) SendHeartbeat(server int) {
 	rf.mu.Lock()
-	rf.DPrintf("[%d] send heartBeat to server [%d]\n", rf.me, server)
 	if rf.Role != LEADER {
-		rf.mu.Unlock()
-		return
+	rf.mu.Unlock()
+	return
 	}
 	if rf.NextIndex[server] <= rf.LastIncludedIndex {
-		rf.mu.Unlock()
-		return
+	rf.mu.Unlock()
+	return
 	}
 	currentTerm := rf.CurrentTerm
 	leaderCommit := rf.CommitIndex
 	prevLogIndex := rf.NextIndex[server] - 1
 	prevLogTerm := rf.GetLogEntry(prevLogIndex).Term
-	rf.mu.Unlock()
 	// 无需发送日志，所以不用填充entry
 	args := AppendEntriesArgs{
-		Term:         currentTerm,
-		LeaderId:     rf.me,
-		PrevLogIndex: prevLogIndex,
-		PrevLogTerm:  prevLogTerm,
-		LeaderCommit: leaderCommit,
+	Term:         currentTerm,
+	LeaderId:     rf.me,
+	PrevLogIndex: prevLogIndex,
+	PrevLogTerm:  prevLogTerm,
+	LeaderCommit: leaderCommit,
 	}
 	reply := AppendEntriesReply{}
+	rf.mu.Unlock()
+	rf.DPrintf("[%d] send heartBeat to server [%d]\n", rf.me, server)
 	if !rf.sendAppendEntries(server, &args, &reply) {
-		return
+	return
 	}
 	rf.mu.Lock()
 	if reply.Term > rf.CurrentTerm {
-		rf.CurrentTerm = reply.Term
-		rf.Role = FOLLOWER
-		rf.VotedFor = -1 //  reset vote
-		rf.ElectionTimeout = GetElectionTimeout()
-		rf.persist()
-		rf.mu.Unlock()
-		return
+	rf.CurrentTerm = reply.Term
+	rf.Role = FOLLOWER
+	rf.VotedFor = -1 //  reset vote
+	rf.ElectionTimeout = GetElectionTimeout()
+	rf.persist()
+	rf.mu.Unlock()
+	return
 	}
 	// Dont need to wait for reply.success
 	if !reply.Success {
@@ -790,20 +930,8 @@ func (rf *Raft) SendHeartbeat(server int) {
 	rf.mu.Unlock()
 }
 
-// 日志复制
-/*
-The consistency check acts as an induction
-step: the initial empty state of the logs satisfies the Log
-Matching Property, and the consistency check preserves
-the Log Matching Property whenever logs are extended.
-As a result, whenever AppendEntries returns successfully,
-the leader knows that the follower’s log is identical to its
-own log up through the new entries.
-*/
-
 func (rf *Raft) SendEntries(server int) {
 	finish := false
-
 	// sendEntries loop
 	for !finish {
 		rf.mu.Lock()
@@ -823,10 +951,6 @@ func (rf *Raft) SendEntries(server int) {
 		prevLogTerm := rf.GetLogEntry(prevLogIndex).Term
 		// 需要发送的日志
 		entries := rf.Log[prevLogIndex-rf.LastIncludedIndex:]
-		rf.DPrintf("[%d] send entries to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]\n",
-			rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
-		finish = true // start appendEntries rpc
-		rf.mu.Unlock()
 		args := AppendEntriesArgs{
 			Term:         currentTerm,
 			LeaderId:     rf.me,
@@ -835,6 +959,10 @@ func (rf *Raft) SendEntries(server int) {
 			Entries:      entries,
 			LeaderCommit: leaderCommit}
 		reply := AppendEntriesReply{}
+		finish = true // start appendEntries rpc
+		rf.mu.Unlock()
+		rf.DPrintf("[%d] send entries to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]\n",
+			rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
 		//  try appendEntries rpc
 		if !rf.sendAppendEntries(server, &args, &reply) {
 			return
@@ -888,5 +1016,6 @@ func (rf *Raft) SendEntries(server int) {
 	}
 }
 
-// 快照复制
-func (rf *Raft) SendSnapshot(server int) {}
+--------------------------------
+*
+*/
