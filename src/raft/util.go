@@ -48,7 +48,7 @@ func (rf *Raft) GetLogEntry(index int) LogEntry {
 	}
 }
 
-func (rf *Raft) LastLogEntry() LogEntry {
+func (rf *Raft) GetLastLogEntry() LogEntry {
 	// 如果日志为空，返回快照的最后一个日志条目
 	if len(rf.Log) == 0 {
 		return LogEntry{Term: rf.LastIncludedTerm, Index: rf.LastIncludedIndex}
@@ -56,7 +56,7 @@ func (rf *Raft) LastLogEntry() LogEntry {
 	return rf.Log[len(rf.Log)-1]
 }
 
-func (rf *Raft) FirstLogEntry() LogEntry {
+func (rf *Raft) GetFirstLogEntry() LogEntry {
 	if len(rf.Log) == 0 {
 		return LogEntry{Term: rf.LastIncludedTerm, Index: rf.LastIncludedIndex}
 	}
