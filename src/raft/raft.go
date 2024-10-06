@@ -53,9 +53,9 @@ const (
 	LEADER                 = 1
 	CANDIDATE              = 2
 	FOLLOWER               = 3
-	BROADCAST_TIME         = 100 // 限制为每秒十次心跳
-	ELECTION_TIMEOUT_BASE  = 250 // broadcastTime ≪ electionTimeout ≪ MTBF
-	ELECTION_TIMEOUT_RANGE = 250
+	BROADCAST_TIME         = 100  // 限制为每秒十次心跳
+	ELECTION_TIMEOUT_BASE  = 1000 // broadcastTime ≪ electionTimeout ≪ MTBF
+	ELECTION_TIMEOUT_RANGE = 1000
 )
 
 type LogEntry struct {
@@ -85,7 +85,7 @@ type Raft struct {
 	BroadcastTime   int // 心跳间隔
 	ElectionTimeout int // 随机选举超时
 	Log             []LogEntry
-	Role            int // 角色
+	Role            int
 	CurrentTerm     int
 	VotedFor        int
 	NextIndex       []int // 即将发送到server的日志
@@ -281,7 +281,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	// State 3: reply find potential leader, update term and convert to follower
-	if rf.CurrentTerm < args.Term || rf.Role != CANDIDATE {
+	if rf.CurrentTerm < args.Term || rf.Role == CANDIDATE {
 		reply.Success = true
 		rf.Role = FOLLOWER
 		rf.CurrentTerm = args.Term
@@ -290,7 +290,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.persist()
 	}
 	// State 4: replier log inconsistency, fill in XTerm, XIndex, XLen and retry
-	if rf.GetLastLogEntry().Index < args.PrevLogIndex || rf.GetLogEntry(args.PrevLogIndex).Term != args.PrevLogTerm {
+	if rf.GetLastLogEntry().Index < args.PrevLogIndex || args.PrevLogTerm != rf.GetLogEntry(args.PrevLogIndex).Term {
 		reply.Success = false
 		reply.XLen = rf.GetLastLogEntry().Index
 		if rf.GetLastLogEntry().Index >= args.PrevLogIndex {
@@ -301,7 +301,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				reply.XIndex--
 			}
 			// 找到第一个不匹配的日志索引
-			reply.XIndex += 1
+			reply.XIndex++
 		}
 		rf.DPrintf("[%d-%d] AppendEntries fail because of inconsistency, XLen = %d, XTerm = %d, XIndex = %d", rf.me, rf.Role, reply.XLen, reply.XTerm, reply.XIndex)
 		return
@@ -313,10 +313,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Success = true
 	for index, entry := range args.Entries {
 		// 日志不重合
-		if rf.GetLastLogEntry().Index < entry.Index ||
-		entry.Term != rf.GetLogEntry(entry.Index).Term {
+		if rf.GetLastLogEntry().Index < entry.Index || entry.Term != rf.GetLogEntry(entry.Index).Term {
 			var log []LogEntry
-			for i := rf.LastIncludedIndex + 1; i < entry.Index; i++ {
+			for i := rf.LastIncludedIndex + 1; i < entry.Index-1; i++ {
 				log = append(log, rf.GetLogEntry(i))
 			}
 			log = append(log, args.Entries[index:]...)
@@ -328,7 +327,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// State 6: update commitIndex
 	if args.LeaderCommit > rf.CommitIndex {
 		rf.CommitIndex = Min(args.LeaderCommit, rf.GetLastLogEntry().Index)
-		rf.DPrintf("[%d-%d] CommitIndex update to %d\n", rf.me, rf.Role, rf.CommitIndex)
+		rf.DPrintf("[%d] Role-[%d]: CommitIndex update to %d\n", rf.me, rf.Role, rf.CommitIndex)
 	}
 }
 
@@ -421,7 +420,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
-// but it does call the Kill() method. your code can use killed() to
+// but it does call the Kill() method. your code can use ki	lled() to
 // check whether Kill() has been called. the use of atomic avoids the
 // need for a lock.
 //
@@ -443,7 +442,7 @@ func (rf *Raft) killed() bool {
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsBeats recently.
 func (rf *Raft) ticker() {
-	// 无限执行raft集群任务
+	// 循环执行raft集群任务
 	for rf.killed() == false {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
@@ -489,9 +488,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.applyCh = applyCh
 	rf.cond = sync.NewCond(&rf.mu)
-	rf.DPrintf("[%d] is Making, len(peers) = %d\n", me, len(peers))
-
 	// Your initialization code here (2A, 2B, 2C).
+
+	rf.DPrintf("[%d] is Making, len(peers) = %d\n", me, len(peers))
 	rf.BroadcastTime = BROADCAST_TIME
 	rf.ElectionTimeout = GetElectionTimeout() // 初始化，随机选举超时
 	rf.Role = FOLLOWER                        // 初始化为follower
@@ -512,23 +511,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 }
 
 /*
-* Customized Functions
-*
+* atomic operation, don't need to add lock
+* 1. 初始阶段快速提交
+* 	一开始leader需要更频繁地发送日志条目 / 心跳，确保日志尽快复制到大多数followers
+* 2. 稳定阶段正常提交
+* 	当日志被大多数follower复制时，leader恢复到正常心跳频率
+* 3. quickCommitCheck只能递减，因为只有初期才需要
  */
 
 func (rf *Raft) DoLeaderTask() {
-	// atomic operation, don't need to add lock
-	/*
-		1. 初始阶段快速提交
-			一开始leader需要更频繁地发送日志条目 / 心跳，确保日志尽快复制到大多数followers
-		2. 稳定阶段正常提交
-			当日志被大多数follower复制时，leader恢复到正常心跳频率
-		3. quickCommitCheck只能递减，因为只有初期才需要
-	*/
 	if atomic.LoadInt32(&rf.quickCommitCheck) > 0 {
 		rf.UpdateCommitIndex()
-		atomic.AddInt32(&rf.quickCommitCheck, -1)
 		time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond)
+		atomic.AddInt32(&rf.quickCommitCheck, -1)
 	} else {
 		rf.TrySendEntries(false) // false代表是否为leader第一次发送日志
 		rf.UpdateCommitIndex()
@@ -662,12 +657,12 @@ func (rf *Raft) DoCandidateTask() {
 }
 
 /*
-If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
-1. 检查LastApplied<CommitIndex
-2. 以ApplyMsg形式发送到rf.applych
-3.应用log[LastApplied]到state machine
-4. update LastApplied
-*/
+* If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
+* 1. 检查LastApplied<CommitIndex
+* 2. 以ApplyMsg形式发送到rf.applych
+* 3.应用log[LastApplied]到state machine
+* 4. update LastApplied
+ */
 func (rf *Raft) UpdateLastApplied() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -697,8 +692,8 @@ func (rf *Raft) UpdateCommitIndex() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	newCommitIndex := rf.CommitIndex
-	for N := rf.CommitIndex + 1; N < rf.GetLastLogEntry().Index; N++ {
-		if N > rf.LastIncludedIndex && rf.Log[N].Term == rf.CurrentTerm {
+	for N := rf.CommitIndex + 1; N <= rf.GetLastLogEntry().Index; N++ {
+		if N > rf.LastIncludedIndex && rf.GetLogEntry(N).Term == rf.CurrentTerm {
 			count := 1
 			for i := 0; i < len(rf.peers); i++ {
 				// 已经复制过的日志
@@ -845,16 +840,20 @@ func (rf *Raft) SendEntries(server int, newEntriesFlag bool) {
 				}
 			}
 			rf.DPrintf("[%d] send entires, rf.NextIndex[%d] update to %d", rf.me, server, rf.NextIndex[server])
-			finish = false // rpc failed, retry
+			// Heartbeat don't need to wait for reply.success, break directly
 			if !newEntriesFlag {
-				// Heartbeat don't need to wait for reply.success, break directly
 				rf.mu.Unlock()
 				break
 			}
+			finish = false // rpc failed, retry
 		} else {
 			// RPC STATE 3: appendEntries success
 			// 发送方连续发送不同长度日志的AppendEntries，且短日志更晚到达，
 			// 利用Max使得NextIndex及MatchIndex单调增长，同时忽略短日志
+			if !newEntriesFlag {
+				rf.mu.Unlock()
+				break
+			}
 			rf.NextIndex[server] = Max(rf.NextIndex[server], prevLogIndex+len(entries)+1)
 			rf.MatchIndex[server] = Max(rf.MatchIndex[server], prevLogIndex+len(entries))
 			rf.DPrintf("[%d] appendEntries success, NextIndex is %v, MatchIndex is %v", rf.me, rf.NextIndex, rf.MatchIndex)
