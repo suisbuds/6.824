@@ -18,13 +18,12 @@ package raft
 //
 
 import (
-	//	"bytes"
+	"6.824/labgob"
+	"6.824/labrpc"
+	"bytes"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	// "6.824/labgob"
-	"6.824/labrpc"
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -36,6 +35,17 @@ import (
 // in part 2D you'll want to send other kinds of messages (e.g.,
 // snapshots) on the applyCh, but set CommandValid to false for these
 // other uses.
+
+const (
+	FAILED                 = -1
+	LEADER                 = 1
+	CANDIDATE              = 2
+	FOLLOWER               = 3
+	BROADCAST_TIME         = 100  // 限制为每秒十次心跳
+	ELECTION_TIMEOUT_BASE  = 1000 // broadcastTime ≪ electionTimeout ≪ MTBF
+	ELECTION_TIMEOUT_RANGE = 1000
+)
+
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
@@ -47,16 +57,6 @@ type ApplyMsg struct {
 	SnapshotTerm  int
 	SnapshotIndex int
 }
-
-const (
-	FAILED                 = -1
-	LEADER                 = 1
-	CANDIDATE              = 2
-	FOLLOWER               = 3
-	BROADCAST_TIME         = 100  // 限制为每秒十次心跳
-	ELECTION_TIMEOUT_BASE  = 1000 // broadcastTime ≪ electionTimeout ≪ MTBF
-	ELECTION_TIMEOUT_RANGE = 1000
-)
 
 type LogEntry struct {
 	Command interface{}
@@ -72,11 +72,10 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	applyCh chan ApplyMsg // 用于发送提交日志的channel
-	cond    *sync.Cond    // 唤醒线程
-	// 当leader开始处理日志时，快速检查是否有新日志需要提交，加速CommitIndex的更新，提高日志提交的及时性
-	quickCommitCheck int32
-	// name string
+	applyCh          chan ApplyMsg // 用于发送提交日志的channel
+	cond             *sync.Cond    // 唤醒线程
+	quickCommitCheck int32         // 当leader开始处理日志时，快速检查是否有新日志需要提交，加速CommitIndex的更新，提高日志提交的及时性
+
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -84,10 +83,10 @@ type Raft struct {
 	// initialize in Make()
 	BroadcastTime   int // 心跳间隔
 	ElectionTimeout int // 随机选举超时
-	Log             []LogEntry
 	Role            int
 	CurrentTerm     int
 	VotedFor        int
+	Log             []LogEntry
 	NextIndex       []int // 即将发送到server的日志
 	MatchIndex      []int // 已经复制到server的日志
 
@@ -125,6 +124,17 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+	// persist CurrentTerm, VotedFor, Log, LastIncludedIndex, LastIncludedTerm
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.CurrentTerm)
+	e.Encode(rf.VotedFor)
+	e.Encode(rf.Log)
+	e.Encode(rf.LastIncludedIndex)
+	e.Encode(rf.LastIncludedTerm)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
+	rf.DPrintf("rf-[%d] call persist(), CurrentTerm = %d, VotedFor = %d, LogLength = %d, LastIncludedIndex = %d, LastIncludedTerm = %d", rf.me, rf.CurrentTerm, rf.VotedFor, len(rf.Log), rf.LastIncludedIndex, rf.LastIncludedTerm)
 }
 
 // restore previously persisted state.
@@ -145,6 +155,36 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var log []LogEntry
+	var lastIncludedIndex int
+	var lastIncludedTerm int
+	var validateDefaultVaule func() bool
+	validateDefaultVaule = func() bool {
+		if d.Decode(&currentTerm) != nil ||
+			d.Decode(&votedFor) != nil ||
+			d.Decode(&log) != nil ||
+			d.Decode(&lastIncludedIndex) != nil ||
+			d.Decode(&lastIncludedTerm) != nil {
+			return false
+		}
+		return true
+	}
+	if !validateDefaultVaule() {
+		panic("ReadPersist(): Decode Error because of indefault value")
+	} else {
+		rf.CurrentTerm = currentTerm
+		rf.VotedFor = votedFor
+		rf.Log = log
+		rf.LastIncludedIndex = lastIncludedIndex
+		rf.LastIncludedTerm = lastIncludedTerm
+		rf.DPrintf("rf-[%d] call readPersist(), CurrentTerm = %d, VotedFor = %d, LogLength = %d, LastIncludedIndex = %d, LastIncludedTerm = %d", rf.me, rf.CurrentTerm, rf.VotedFor, len(rf.Log), lastIncludedIndex, lastIncludedTerm)
+	}
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -187,12 +227,12 @@ type RequestVoteReply struct {
 
 // appendEntries RPC
 type AppendEntriesArgs struct {
-	Term         int
-	LeaderId     int
-	PrevLogIndex int
-	PrevLogTerm  int
-	Entries      []LogEntry
-	LeaderCommit int // leader's commitIndex
+	Term              int
+	LeaderId          int
+	PrevLogIndex      int
+	PrevLogTerm       int
+	Entries           []LogEntry
+	LeaderCommitIndex int
 }
 
 type AppendEntriesReply struct {
@@ -205,22 +245,24 @@ type AppendEntriesReply struct {
 }
 
 // snapshot RPC
+type InstallSnapshotArgs struct {
+}
 
-type InstallSnapshotArgs struct{}
-
-type InstallSnapshotReply struct{}
+type InstallSnapshotReply struct {
+}
 
 // example RequestVote RPC handler.
-/*
-1. Reply false if term < currentTerm
-2. If votedFor is null or candidateId, and candidate’s log is at
-	least as up-to-date as receiver’s log, grant vote
-*/
 // Invoked by candidates to gather votes
+/*
+* 1. Reply false if term < currentTerm
+* 2. If votedFor is null or candidateId, and candidate’s log is at
+* 	least as up-to-date as receiver’s log, grant vote
+ */
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	rf.DPrintf("rf-[%d] Get RequestVote from rf-[%d]", rf.me, args.CandidateId)
 	reply.Term = rf.CurrentTerm
 	LastIndex := rf.GetLastLogEntry().Index
 	LastTerm := rf.GetLastLogEntry().Term
@@ -239,21 +281,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 	// Check candidate's log is at least as up-to-date as receiver's log
-	var ValidateLeader func() bool
-	ValidateLeader = func() bool {
+	var ValidateCandidateLog func() bool
+	ValidateCandidateLog = func() bool {
 		if LastTerm < args.LastLogTerm || (LastTerm == args.LastLogTerm && LastIndex <= args.LastLogIndex) {
 			return true
 		}
 		return false
 	}
 	// 检查选票是否在过渡状态
-	if rf.VotedFor == -1 && ValidateLeader() {
+	if rf.VotedFor == -1 && ValidateCandidateLog() {
 		reply.VoteGranted = true
 		rf.VotedFor = args.CandidateId
 		// 投票成功，重置选举超时，防止不符合的candidate阻塞潜在leader
-		rf.ElectionTimeout = GetElectionTimeout()
 		rf.persist()
-		rf.DPrintf("[%d %d] vote for %d, term = %d", rf.me, rf.Role, args.CandidateId, rf.CurrentTerm)
+		rf.ElectionTimeout = GetElectionTimeout()
+		rf.DPrintf("rf-[%d] Role = %d, VoteFor = %d, Term = %d", rf.me, rf.Role, args.CandidateId, rf.CurrentTerm)
 	}
 }
 
@@ -270,11 +312,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// State 1: reset election timeout, prevent from election while having leader
-	rf.DPrintf("[%d-%d] Get AppendEntries from leader [%d], LastIncludeIndex = %d, CurrentTerm = %d, PrevLogIndex = %d, PrevLogTerm = %d, LeaderTerm = %d)\n",
+	rf.DPrintf("rf-[%d], Role = %d, Get AppendEntries from leader-[%d], LastIncludeIndex = %d, CurrentTerm = %d, PrevLogIndex = %d, PrevLogTerm = %d, LeaderTerm = %d",
 		rf.me, rf.Role, args.LeaderId, rf.LastIncludedIndex, rf.CurrentTerm, args.PrevLogIndex, args.PrevLogTerm, args.Term)
+
+	reply.Success = true
+
 	reply.Term = rf.CurrentTerm
 	rf.ElectionTimeout = GetElectionTimeout()
-	// State 2: 发送方的term小于接收方的term；发送方prevLogIndex处的日志条目已经被接收方压缩删除
+	// State 2: 发送方的term小于接收方的term / 发送方prevLogIndex处的日志条目已经被接收方压缩删除
 	// 如果是后者，XLen=0，sendEntries中NextIndex将被设定为Max(0,1)即1，并在下次TrySendEntries中发送快照
 	if args.Term < rf.CurrentTerm || rf.LastIncludedIndex > args.PrevLogIndex {
 		reply.Success = false
@@ -286,8 +331,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.Role = FOLLOWER
 		rf.CurrentTerm = args.Term
 		rf.VotedFor = -1    // reset vote, dont vote anymore
-		rf.cond.Broadcast() // 唤醒election thread
 		rf.persist()
+		rf.cond.Broadcast() // 唤醒election thread
 	}
 	// State 4: replier log inconsistency, fill in XTerm, XIndex, XLen and retry
 	if rf.GetLastLogEntry().Index < args.PrevLogIndex || args.PrevLogTerm != rf.GetLogEntry(args.PrevLogIndex).Term {
@@ -303,31 +348,30 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			// 找到第一个不匹配的日志索引
 			reply.XIndex++
 		}
-		rf.DPrintf("[%d-%d] AppendEntries fail because of inconsistency, XLen = %d, XTerm = %d, XIndex = %d", rf.me, rf.Role, reply.XLen, reply.XTerm, reply.XIndex)
+		rf.DPrintf("rf-[%d], Role = %d, AppendEntries fail because of inconsistency, XLen = %d, XTerm = %d, XIndex = %d", rf.me, rf.Role, reply.XLen, reply.XTerm, reply.XIndex)
 		return
 	}
 	// State 5: pass log consistency check, merge sender's log with local log
 	// 1. 发送方日志为本地日志子集，不作处理
 	// 2. 不重合时，将本地日志置为发送方日志
 	// 3. 特殊情况：发送方连续发送不同长度的日志，且短日志更晚到达，此时不能将本地日志置为发送方日志，会使本地日志回退（日志只能递增）
-	reply.Success = true
 	for index, entry := range args.Entries {
 		// 日志不重合
 		if rf.GetLastLogEntry().Index < entry.Index || entry.Term != rf.GetLogEntry(entry.Index).Term {
 			var log []LogEntry
-			for i := rf.LastIncludedIndex + 1; i < entry.Index-1; i++ {
+			for i := rf.LastIncludedIndex + 1; i <= entry.Index-1; i++ {
 				log = append(log, rf.GetLogEntry(i))
 			}
 			log = append(log, args.Entries[index:]...)
 			rf.Log = log
 			rf.persist()
-			rf.DPrintf("[%d-%d] Append new log %v", rf.me, rf.Role, rf.Log)
+			rf.DPrintf("rf-[%d], Role = %d, Append new log = %v", rf.me, rf.Role, rf.Log)
 		}
 	}
 	// State 6: update commitIndex
-	if args.LeaderCommit > rf.CommitIndex {
-		rf.CommitIndex = Min(args.LeaderCommit, rf.GetLastLogEntry().Index)
-		rf.DPrintf("[%d] Role-[%d]: CommitIndex update to %d\n", rf.me, rf.Role, rf.CommitIndex)
+	if args.LeaderCommitIndex > rf.CommitIndex {
+		rf.CommitIndex = Min(args.LeaderCommitIndex, rf.GetLastLogEntry().Index)
+		rf.DPrintf("rf-[%d] Role = %d, CommitIndex update to %d", rf.me, rf.Role, rf.CommitIndex)
 	}
 }
 
@@ -389,17 +433,17 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 // 客户端向Raft服务器发送命令command
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
-	_, isLeader := rf.GetState()
+	// Your code here (2B).
+
 	// 不是leader无法Start
+	_, isLeader := rf.GetState()
 	if !isLeader || rf.killed() {
-		rf.DPrintf("[%d] Start() Fail isLeader = %t, isKilled = %t", rf.me, isLeader, rf.killed())
+		rf.DPrintf("rf-[%d] Start() Fail, isLeader = %t, isKilled = %t", rf.me, isLeader, rf.killed())
 		return -1, -1, false
 	}
 
-	// Your code here (2B).
 	// leader创建日志条目并通过心跳通知所有follower写入日志
 	rf.mu.Lock()
-
 	logEntry := LogEntry{
 		Command: command,
 		Term:    rf.CurrentTerm,
@@ -408,7 +452,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.Log = append(rf.Log, logEntry)
 	rf.persist()
 	rf.mu.Unlock()
-	rf.DPrintf("[%d] Start(), index [%d], term [%d], command is %d", rf.me, logEntry.Index, logEntry.Term, logEntry.Command)
+	rf.DPrintf("rf-[%d] Start(), Index = %d, Term = %d, Command = %d", rf.me, logEntry.Index, logEntry.Term, logEntry.Command)
 	// leader一开始要更频繁地发送日志条目 / 心跳
 	atomic.StoreInt32(&rf.quickCommitCheck, 20)
 	for i := 0; i < len(rf.peers); i++ {
@@ -455,7 +499,7 @@ func (rf *Raft) ticker() {
 		// 在任务函数中处理完元数据 / 在耗时操作前 记得解锁，防止死锁
 		switch role {
 		case LEADER:
-			rf.DoLeaderTask()
+			rf.doLeaderTask()
 		case CANDIDATE:
 			rf.DoCandidateTask() // candidate to follower or leader or election timeout
 		case FOLLOWER:
@@ -490,7 +534,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.cond = sync.NewCond(&rf.mu)
 	// Your initialization code here (2A, 2B, 2C).
 
-	rf.DPrintf("[%d] is Making, len(peers) = %d\n", me, len(peers))
+	rf.DPrintf("rf-[%d] is Making, Len(peers) = %d\n", me, len(peers))
 	rf.BroadcastTime = BROADCAST_TIME
 	rf.ElectionTimeout = GetElectionTimeout() // 初始化，随机选举超时
 	rf.Role = FOLLOWER                        // 初始化为follower
@@ -519,10 +563,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 * 3. quickCommitCheck只能递减，因为只有初期才需要
  */
 
-func (rf *Raft) DoLeaderTask() {
+func (rf *Raft) doLeaderTask() {
 	if atomic.LoadInt32(&rf.quickCommitCheck) > 0 {
 		rf.UpdateCommitIndex()
-		time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond)
+		time.Sleep(time.Millisecond) // 快速提交阶段，强制睡眠
 		atomic.AddInt32(&rf.quickCommitCheck, -1)
 	} else {
 		rf.TrySendEntries(false) // false代表是否为leader第一次发送日志
@@ -600,8 +644,8 @@ func (rf *Raft) DoCandidateTask() {
 					// 立刻转换为follower并重置超时
 					rf.CurrentTerm = reply.Term
 					rf.Role = FOLLOWER
-					rf.ElectionTimeout = GetElectionTimeout()
 					rf.persist()
+					rf.ElectionTimeout = GetElectionTimeout()
 				}
 				rf.cond.Broadcast()
 			}(i)
@@ -778,23 +822,23 @@ func (rf *Raft) SendEntries(server int, newEntriesFlag bool) {
 		var reply AppendEntriesReply
 		if newEntriesFlag {
 			args = AppendEntriesArgs{
-				Term:         currentTerm,
-				LeaderId:     rf.me,
-				PrevLogIndex: prevLogIndex,
-				PrevLogTerm:  prevLogTerm,
-				Entries:      entries,
-				LeaderCommit: leaderCommit}
+				Term:              currentTerm,
+				LeaderId:          rf.me,
+				PrevLogIndex:      prevLogIndex,
+				PrevLogTerm:       prevLogTerm,
+				Entries:           entries,
+				LeaderCommitIndex: leaderCommit}
 			reply = AppendEntriesReply{}
 			rf.DPrintf("[%d] send entries to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]\n",
 				rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
 		} else {
 			// 无需发送日志，所以不用填充entry
 			args = AppendEntriesArgs{
-				Term:         currentTerm,
-				LeaderId:     rf.me,
-				PrevLogIndex: prevLogIndex,
-				PrevLogTerm:  prevLogTerm,
-				LeaderCommit: leaderCommit}
+				Term:              currentTerm,
+				LeaderId:          rf.me,
+				PrevLogIndex:      prevLogIndex,
+				PrevLogTerm:       prevLogTerm,
+				LeaderCommitIndex: leaderCommit}
 			reply = AppendEntriesReply{}
 			rf.DPrintf("[%d] send heartBeat to server [%d]\n", rf.me, server)
 		}
@@ -811,8 +855,8 @@ func (rf *Raft) SendEntries(server int, newEntriesFlag bool) {
 			rf.CurrentTerm = reply.Term
 			rf.Role = FOLLOWER
 			rf.VotedFor = -1 // reset vote
-			rf.ElectionTimeout = GetElectionTimeout()
 			rf.persist()
+			rf.ElectionTimeout = GetElectionTimeout()
 			rf.mu.Unlock()
 			return
 		}
