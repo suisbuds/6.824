@@ -7,18 +7,18 @@ import (
 )
 
 // Debugging
-const Debug = false
+const Debug = true
 
-func (rf *Raft) DPrintf(format string, a ...interface{}) (n int, err error) {
+func (rf *Raft) DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
 	if Debug {
-		log.Printf(format, a...)
+		if debug {
+			log.Printf(format, a...)
+		}
 	}
 	return
 }
 
 /*
-* 当一个raft节点超时时它会重新发起选举
-* 由于随机超时，不太可能同时出现多个节点超时并发起选举，造成选票分裂
 * Raft uses randomized election timeouts to ensure that
 * split votes are rare and that they are resolved quickly. To
 * prevent split votes in the first place, election timeouts are
@@ -32,9 +32,14 @@ func (rf *Raft) DPrintf(format string, a ...interface{}) (n int, err error) {
 * starting the next election; this reduces the likelihood of
 * another split vote in the new election.
  */
+
 func GetElectionTimeout() int {
 	rand.Seed(time.Now().UnixNano())
 	return ELECTION_TIMEOUT_BASE + int(rand.Int31n(ELECTION_TIMEOUT_RANGE))
+}
+
+func (rf *Raft) GetLogEntriesLength() int {
+	return len(rf.Log)
 }
 
 func (rf *Raft) GetLogEntry(index int) LogEntry {
