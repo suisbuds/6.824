@@ -261,7 +261,7 @@ type RequestVoteReply struct {
 type AppendEntriesArgs struct {
 	Term              int
 	LeaderId          int
-	PrevLogIndex      int
+	PrevLogIndex      int // index of log entry immediately preceding new ones
 	PrevLogTerm       int
 	Entries           []LogEntry
 	LeaderCommitIndex int
@@ -303,8 +303,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	rf.DPrintf(false, "rf-[%d] Get RequestVote from rf-[%d]", rf.me, args.CandidateId)
 	reply.Term = rf.CurrentTerm
-	LastIndex := rf.GetLastLogEntry().Index
-	LastTerm := rf.GetLastLogEntry().Term
+	lastIndex := rf.GetLastLogEntry().Index
+	lastTerm := rf.GetLastLogEntry().Term
 	// currentTerm > candidate's term, reject to vote
 	// currentTerm < candidate's term, convert to follower
 	// if rf.currentTerm == args.Term, directly return
@@ -322,7 +322,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Check candidate's log is at least as up-to-date as receiver's log
 	var validateCandidateLog func() bool
 	validateCandidateLog = func() bool {
-		if LastTerm < args.LastLogTerm || (LastTerm == args.LastLogTerm && LastIndex <= args.LastLogIndex) {
+		if lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && lastIndex <= args.LastLogIndex) {
 			return true
 		}
 		return false
@@ -372,7 +372,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.cond.Broadcast() // 唤醒election thread
 	}
 	// State 4: replier log inconsistency, fill in XTerm, XIndex, XLen and retry
-	if rf.GetLastLogEntry().Index < args.PrevLogIndex || args.PrevLogTerm != rf.GetLogEntry(args.PrevLogIndex).Term {
+	if rf.GetLastLogEntry().Index < args.PrevLogIndex || rf.GetLogEntry(args.PrevLogIndex).Term != args.PrevLogTerm {
 		reply.Success = false
 		reply.XLen = rf.GetLastLogEntry().Index
 		if rf.GetLastLogEntry().Index >= args.PrevLogIndex {
@@ -396,7 +396,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Success = true
 	for index, entry := range args.Entries {
 		// 日志不重合
-		if rf.GetLastLogEntry().Index < entry.Index || entry.Term != rf.GetLogEntry(entry.Index).Term {
+		if rf.GetLastLogEntry().Index < entry.Index || rf.GetLogEntry(entry.Index).Term != entry.Term {
 			var log []LogEntry
 			for i := rf.LastIncludedIndex + 1; i < entry.Index; i++ {
 				log = append(log, rf.GetLogEntry(i))
@@ -445,8 +445,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.Role = FOLLOWER
 		rf.CurrentTerm = args.Term
 		rf.VotedFor = -1
-		rf.cond.Broadcast()
 		rf.persist()
+		rf.cond.Broadcast()
 	}
 	// 2. saveStateAndSnapshot to persister
 	w := new(bytes.Buffer)
@@ -696,11 +696,11 @@ func (rf *Raft) doLeaderTask() {
 
 func (rf *Raft) doFollowerTask() bool {
 	rf.mu.Lock()
-	rf.DPrintf(false, "[%d] 's ElectionTimeout = %d\n", rf.me, rf.ElectionTimeout)
+	rf.DPrintf(false, "rf-[%d] 's ElectionTimeout = %d", rf.me, rf.ElectionTimeout)
 	// 检查是否即将超时，electionTimeout<100ms
 	if rf.ElectionTimeout < rf.BroadcastTime {
 		rf.Role = CANDIDATE
-		rf.DPrintf(false, "[%d] is ElectionTimeout, convert to CANDIDATE\n", rf.me)
+		rf.DPrintf(false, "rf-[%d] is ElectionTimeout, convert to CANDIDATE", rf.me)
 		rf.mu.Unlock()
 		// change to candidate, continue loop
 		return true
@@ -721,6 +721,11 @@ func (rf *Raft) doFollowerTask() bool {
 * election, (b) another server establishes itself as leader, or
 * (c) a period of time goes by with no winner. These out-
 * comes are discussed separately in the paragraphs below.
+* Three goroutine
+* 1. RequestVote RPC
+* 2. timeout goroutine
+* 3. main goroutine to check election state
+* Use cond to notify main goroutine
  */
 func (rf *Raft) doCandidateTask() {
 	// prepare for election
@@ -735,7 +740,7 @@ func (rf *Raft) doCandidateTask() {
 	lastLogIndex := rf.GetLastLogEntry().Index
 	lastLogTerm := rf.GetLastLogEntry().Term
 	rf.mu.Unlock()
-	rf.DPrintf(false, "[%d] start election, term = %d\n", rf.me, term)
+	rf.DPrintf(false, "rf-[%d] start election, term = %d", rf.me, term)
 	// State1：无锁并发RequestVote RPC
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
@@ -747,20 +752,20 @@ func (rf *Raft) doCandidateTask() {
 					LastLogTerm:  lastLogTerm,
 				}
 				reply := RequestVoteReply{}
-				rf.DPrintf(false, "[%d] send RequestVote to server [%d]\n", rf.me, server)
+				rf.DPrintf(false, "rf-[%d] send RequestVote to server [%d]", rf.me, server)
 				if !rf.sendRequestVote(server, &args, &reply) {
-					// 发送失败，终止对应协程，cond唤醒主线程
+					// 发送失败，广播唤醒主线程
 					rf.cond.Broadcast()
 					return
 				}
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
-				// check 是否获得选票
+				// check 选票
 				if reply.VoteGranted {
 					votesGet++
 				}
+				// 立刻转换为follower
 				if reply.Term > rf.CurrentTerm {
-					// 立刻转换为follower并重置超时
 					rf.CurrentTerm = reply.Term
 					rf.persist()
 					rf.Role = FOLLOWER
@@ -770,18 +775,17 @@ func (rf *Raft) doCandidateTask() {
 			}(i)
 		}
 	}
-	// State2：超时结束goroutine，并唤醒主线程提醒超时
+	// State2：在主线程中，candidate运行超时唤醒goroutine，将ElectionTimeout原子置1，并唤醒主线程提醒超时
 	var timeout rune
 	go func(electionTimeout int, timeout *rune) {
 		time.Sleep(time.Duration(electionTimeout) * time.Millisecond)
-		// atomic operation
 		atomic.StoreInt32(timeout, 1)
 		rf.cond.Broadcast()
 	}(electionTimeout, &timeout)
 
-	// State3：主线程循环判断选举是否结束
+	// State3：由主线程判断选举是否结束
 
-	// 判断选举状态：currentTerm, State, isTimeout
+	// check election state：currentTerm, State, isTimeout
 	var validateElectionState func() bool
 	validateElectionState = func() bool {
 		if rf.CurrentTerm == term &&
@@ -795,20 +799,20 @@ func (rf *Raft) doCandidateTask() {
 		rf.mu.Lock()
 		// 选举尚未结束
 		if votesGet <= len(rf.peers)/2 && validateElectionState() {
-			rf.cond.Wait() // 主线程等待
+			rf.cond.Wait() // 主线程等待被唤醒
 		}
 		if !validateElectionState() {
 			rf.mu.Unlock()
 			break
 		}
 		if votesGet > len(rf.peers)/2 {
-			rf.DPrintf(false, "[%d] is voted as Leader, term is [%d]\n", rf.me, rf.CurrentTerm)
+			rf.DPrintf(false, "rf-[%d] is voted as Leader, term = [%d]", rf.me, rf.CurrentTerm)
 			rf.Role = LEADER
 			// Reinitialize leader's log state
 			rf.CommitIndex = 0
 			for i := 0; i < len(rf.peers); i++ {
-				rf.MatchIndex[i] = 0
-				rf.NextIndex[i] = rf.GetLastLogEntry().Index + 1
+				rf.MatchIndex[i] = 0                             // optimistical initialization
+				rf.NextIndex[i] = rf.GetLastLogEntry().Index + 1 // pessimistical initialization
 			}
 			rf.mu.Unlock()
 			rf.trySendEntries(true) // first time to send log entries
@@ -816,37 +820,12 @@ func (rf *Raft) doCandidateTask() {
 		}
 		rf.mu.Unlock()
 	}
-	rf.DPrintf(false, "Candidate [%d] finishes election", rf.me)
+	rf.DPrintf(false, "Candidate rf-[%d] finishes election", rf.me)
 }
 
-/*
-* If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
-* 1. 检查LastApplied<CommitIndex
-* 2. 以ApplyMsg形式发送到rf.applych
-* 3.应用log[LastApplied]到state machine
-* 4. update LastApplied
- */
-func (rf *Raft) updateLastApplied() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	rf.LastApplied = Max(rf.LastApplied, rf.LastIncludedIndex)
-	// 防止发送被日志压缩删除的条目：LastApplied >= LastIncludedIndex
-	for rf.LastApplied < rf.CommitIndex && rf.LastApplied < rf.GetLastLogEntry().Index && rf.LastApplied >= rf.LastIncludedIndex {
-		// 应用LastApplied+1的日志
-		msg := ApplyMsg{
-			CommandValid: true,
-			Command:      rf.GetLogEntry(rf.LastApplied + 1).Command,
-			CommandIndex: rf.LastApplied + 1,
-		}
-		rf.mu.Unlock()
-		rf.applyCh <- msg
-		rf.mu.Lock()
-		rf.DPrintf(false, "[%d] apply msg [%d] success", rf.me, rf.LastApplied+1)
-		rf.LastApplied++
-	}
-}
 
 /*
+* Commit Restriction
 * If there exists an N such that N > commitIndex, a majority
 * of matchIndex[i] ≥ N, and log[N].term == currentTerm:
 * set commitIndex = N
@@ -876,6 +855,35 @@ func (rf *Raft) updateCommitIndex() {
 	rf.DPrintf(false, "[%d] update CommitIndex, term = %d, NextIndex is %v, MatchIndex is %v, CommitIndex is %d", rf.me, rf.CurrentTerm, rf.NextIndex, rf.MatchIndex, rf.CommitIndex)
 }
 
+
+/*
+* If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
+* 1. 检查LastApplied<CommitIndex
+* 2. 以ApplyMsg形式发送到rf.applych
+* 3.应用log[LastApplied]到state machine
+* 4. update LastApplied
+ */
+func (rf *Raft) updateLastApplied() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.LastApplied = Max(rf.LastApplied, rf.LastIncludedIndex)
+	// 防止发送被日志压缩删除的条目：LastApplied >= LastIncludedIndex
+	for rf.LastApplied < rf.CommitIndex && rf.LastApplied < rf.GetLastLogEntry().Index && rf.LastApplied >= rf.LastIncludedIndex {
+		// 应用LastApplied+1的日志
+		msg := ApplyMsg{
+			CommandValid: true,
+			Command:      rf.GetLogEntry(rf.LastApplied + 1).Command,
+			CommandIndex: rf.LastApplied + 1,
+		}
+		rf.mu.Unlock()
+		rf.applyCh <- msg
+		rf.mu.Lock()
+		rf.DPrintf(false, "[%d] apply msg [%d] success", rf.me, rf.LastApplied+1)
+		rf.LastApplied++
+	}
+}
+
+
 // 尝试执行心跳rpc / 日志复制 / 快照复制
 // initialize: 成为leader后初次调用
 func (rf *Raft) trySendEntries(firstSendEntries bool) {
@@ -889,15 +897,15 @@ func (rf *Raft) trySendEntries(firstSendEntries bool) {
 			// 成为leader后首次调用
 			// lastLogIndex >= nextIndex，说明本地有新日志需要复制到目标节点
 			if lastLogIndex >= nextIndex || firstSendEntries {
-				// SendEntries更新目标节点
+				// SendEntries更新目标节点日志
 				if firstLogIndex <= nextIndex {
 					go rf.sendEntries(i, true)
 				} else {
-					// 目标节点的日志远远落后，需要SendSnapshot更新
+					// SendSnapshot更新目标节点远远落后的日志
 					go rf.sendSnapshot(i)
 				}
 			} else {
-				// heartbeat保活
+				// SendHeartbeat
 				go rf.sendEntries(i, false)
 			}
 		}
