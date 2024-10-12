@@ -1,2 +1,4 @@
 {
+    "accessibility.verbosity.inlineChat": true,
+    "inlineChat.finishOnType": true
 }
