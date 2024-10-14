@@ -2,10 +2,10 @@ package kvraft
 
 
 const (
+	None           = -1
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
-	None           = -1
 )
 
 
