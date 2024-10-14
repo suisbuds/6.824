@@ -12,12 +12,15 @@ import (
 
 const Debug = false
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
+func DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
 	if Debug {
-		log.Printf(format, a...)
+		if debug {
+			log.Printf(format, a...)
+		}
 	}
 	return
 }
+
 
 type Op struct {
 	// Your definitions here.

@@ -885,7 +885,7 @@ func (rf *Raft) updateLastApplied() {
 
 
 // 尝试执行心跳rpc / 日志复制 / 快照复制
-// initialize: 成为leader后初次调用
+// firstSendEntries: 成为leader后初次调用
 func (rf *Raft) trySendEntries(firstSendEntries bool) {
 	for i := 0; i < len(rf.peers); i++ {
 		rf.mu.Lock()

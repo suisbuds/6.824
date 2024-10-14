@@ -1,11 +1,16 @@
 package kvraft
 
+
 const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
+	None           = -1
 )
 
+
+
+// mark operation whether success
 type Err string
 
 // Put or Append
@@ -16,6 +21,8 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientId	int64
+	SequenceNumber	int64
 }
 
 type PutAppendReply struct {
@@ -25,6 +32,9 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
+	// mark client's operation
+	ClientId int64
+	SequenceNumber int64
 }
 
 type GetReply struct {
