@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 
 	"6.824/labrpc"
-	"github.com/go-playground/validator/v10/translations/ar"
 )
 
 type Clerk struct {
@@ -15,7 +14,7 @@ type Clerk struct {
 	leaderId int // raft leader peer id, to avoid researching leader every time
 	// cliendId and sequenceNumber are used to identify the client's operation
 	clientId       int64
-	sequenceNumber int64
+	sequenceNumber int64 // 单调递增
 }
 
 func nrand() int64 {
@@ -29,7 +28,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
-	ck.leaderId = None
+	ck.leaderId = NONE
 	ck.clientId = nrand()
 	ck.sequenceNumber = 0
 	return ck
@@ -52,7 +51,7 @@ func (ck *Clerk) Get(key string) string {
 	DPrintf(false, "[clerk-start] Client try to Get Key = %s", key)
 	atomic.AddInt64(&ck.sequenceNumber, 1) // mark client's operation
 	// If leaderId is not -1, try to send Get RPC to the leader
-	if ck.leaderId != None {
+	if ck.leaderId != NONE {
 		args := GetArgs{
 			Key:            key,
 			ClientId:       ck.clientId,
@@ -95,21 +94,21 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	DPrintf(false,"[clerk-start] Client try to PutAppend, key = %s, val = %s, op = %s", key, value, op)
+	DPrintf(false, "[clerk-start] Client try to PutAppend, key = %s, val = %s, op = %s", key, value, op)
 	atomic.AddInt64(&ck.sequenceNumber, 1) // mark client's operation
 	// If leaderId is not -1, try to send PutAppend RPC to the leader
-	if ck.leaderId != None {
+	if ck.leaderId != NONE {
 		args := PutAppendArgs{
-			Key: key,
-			Value: value,
-			Op: op,
-			ClientId: ck.clientId,
+			Key:            key,
+			Value:          value,
+			Op:             op,
+			ClientId:       ck.clientId,
 			SequenceNumber: ck.sequenceNumber,
 		}
 		reply := PutAppendReply{}
 		ok := ck.servers[ck.leaderId].Call("KVServer.PutAppend", &args, &reply)
 		if ok && reply.Err == "" {
-			DPrintf(false,"[clerk-over] PutAppend key = %s, val = %s, op = %s, old leaderId = %d", key, value, op, ck.leaderId)
+			DPrintf(false, "[clerk-over] PutAppend key = %s, val = %s, op = %s, old leaderId = %d", key, value, op, ck.leaderId)
 			return
 		}
 	}
@@ -117,17 +116,17 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	for {
 		for i := range ck.servers {
 			args := PutAppendArgs{
-				Key: key,
-				Value: value,
-				Op: op,
-				ClientId: ck.clientId,
+				Key:            key,
+				Value:          value,
+				Op:             op,
+				ClientId:       ck.clientId,
 				SequenceNumber: ck.sequenceNumber,
 			}
 			reply := PutAppendReply{}
 			ok := ck.servers[i].Call("KVServer.PutAppend", &args, &reply)
 			if ok && reply.Err == "" {
 				ck.leaderId = i
-				DPrintf(false,"[clerk-over] PutAppend key = %s, val = %s, op = %s, new leaderId = %d", key, value, op, ck.leaderId)
+				DPrintf(false, "[clerk-over] PutAppend key = %s, val = %s, op = %s, new leaderId = %d", key, value, op, ck.leaderId)
 				return
 			}
 		}

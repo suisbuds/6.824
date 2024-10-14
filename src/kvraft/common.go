@@ -1,14 +1,28 @@
 package kvraft
 
+import "log"
 
 const (
-	None           = -1
+	Debug          = false
+	NONE           = -1
+	GET            = 0
+	PUT            = 1
+	APPEND         = 2
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrServerDead  = "ErrServerDead"
+	ErrRaftTimeout     = "ErrRaftTimeout"
 )
 
-
+func DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		if debug {
+			log.Printf(format, a...)
+		}
+	}
+	return
+}
 
 // mark operation whether success
 type Err string
@@ -21,8 +35,8 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	ClientId	int64
-	SequenceNumber	int64
+	ClientId       int64
+	SequenceNumber int64
 }
 
 type PutAppendReply struct {
@@ -33,7 +47,7 @@ type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
 	// mark client's operation
-	ClientId int64
+	ClientId       int64
 	SequenceNumber int64
 }
 

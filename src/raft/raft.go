@@ -1068,3 +1068,8 @@ func (rf *Raft) sendSnapshot(server int) {
 	rf.NextIndex[server] = rf.LastIncludedIndex + 1 // nextIndex use optismistic strategy
 	rf.MatchIndex[server] = rf.LastIncludedIndex    // matchIndex use pessimistic strategy
 }
+
+// use in lab3
+func (rf *Raft)  RaftStateSize() int {
+	return rf.persister.RaftStateSize()
+}
