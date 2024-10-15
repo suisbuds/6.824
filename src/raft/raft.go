@@ -823,7 +823,6 @@ func (rf *Raft) doCandidateTask() {
 	rf.DPrintf(false, "Candidate rf-[%d] finishes election", rf.me)
 }
 
-
 /*
 * Commit Restriction
 * If there exists an N such that N > commitIndex, a majority
@@ -855,7 +854,6 @@ func (rf *Raft) updateCommitIndex() {
 	rf.DPrintf(false, "[%d] update CommitIndex, term = %d, NextIndex is %v, MatchIndex is %v, CommitIndex is %d", rf.me, rf.CurrentTerm, rf.NextIndex, rf.MatchIndex, rf.CommitIndex)
 }
 
-
 /*
 * If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
 * 1. 检查LastApplied<CommitIndex
@@ -882,7 +880,6 @@ func (rf *Raft) updateLastApplied() {
 		rf.LastApplied++
 	}
 }
-
 
 // 尝试执行心跳rpc / 日志复制 / 快照复制
 // firstSendEntries: 成为leader后初次调用
@@ -1070,6 +1067,6 @@ func (rf *Raft) sendSnapshot(server int) {
 }
 
 // use in lab3
-func (rf *Raft)  RaftStateSize() int {
+func (rf *Raft) RaftStateSize() int {
 	return rf.persister.RaftStateSize()
 }
