@@ -214,6 +214,7 @@ func partitioner(t *testing.T, cfg *config, ch chan bool, done *int32) {
 // snapshots shouldn't be used.
 func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliable bool, crash bool, partitions bool, maxraftstate int, randomkeys bool) {
 
+	// generate a test title
 	title := "Test: "
 	if unreliable {
 		// the network drops RPC requests and replies.
@@ -240,6 +241,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 	}
 	title = title + " (" + part + ")" // 3A or 3B
 
+	// initialize the configuration and start the test
 	cfg := make_config(t, nservers, unreliable, maxraftstate)
 	defer cfg.cleanup()
 
@@ -248,6 +250,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 
 	ck := cfg.makeClient(cfg.All())
 
+	// client and partitioner management initialize
 	done_partitioner := int32(0)
 	done_clients := int32(0)
 	ch_partitioner := make(chan bool)
@@ -255,6 +258,8 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 	for i := 0; i < nclients; i++ {
 		clnts[i] = make(chan int)
 	}
+	// start clients and partitioner
+	// 随机执行Get, Put, Append操作
 	for i := 0; i < 3; i++ {
 		// log.Printf("Iteration %v\n", i)
 		atomic.StoreInt32(&done_clients, 0)
@@ -299,6 +304,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			}
 		})
 
+		// partitions test
 		if partitions {
 			// Allow the clients to perform some operations without interruption
 			time.Sleep(1 * time.Second)
@@ -321,6 +327,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			time.Sleep(electionTimeout)
 		}
 
+		// crash test
 		if crash {
 			// log.Printf("shutdown servers\n")
 			for i := 0; i < nservers; i++ {
@@ -337,6 +344,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			cfg.ConnectAll()
 		}
 
+		// Get operations result from clients
 		// log.Printf("wait for clients\n")
 		for i := 0; i < nclients; i++ {
 			// log.Printf("read from clients %d\n", i)
@@ -352,6 +360,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			}
 		}
 
+		// snapshot test
 		if maxraftstate > 0 {
 			// Check maximum after the servers have processed all client
 			// requests and had time to checkpoint.
@@ -369,6 +378,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		}
 	}
 
+	// linearizability check
 	res, info := porcupine.CheckOperationsVerbose(models.KvModel, opLog.Read(), linearizabilityCheckTimeout)
 	if res == porcupine.Illegal {
 		file, err := ioutil.TempFile("", "*.html")

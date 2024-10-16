@@ -3,7 +3,7 @@ package kvraft
 import "log"
 
 const (
-	Debug= false
+	Debug= true
 	NONE           = -1
 	GET            = 0
 	PUT            = 1

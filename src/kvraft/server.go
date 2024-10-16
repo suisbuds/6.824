@@ -48,18 +48,20 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 	// 将客户端发送的操作以Command形式发送给Raft
-	_, _, isLeader := kv.rf.Start(Op{
+	op := Op{
 		OperationType:  GET,
 		Key:            args.Key,
 		ClientId:       args.ClientId,
 		SequenceNumber: args.SequenceNumber,
-	})
+	}
+	_, _, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	}
 	DPrintf(false, "server-[%d] Get Command, ClientId = %d, Seq = %d, Key = %s", kv.me, args.ClientId, args.SequenceNumber, args.Key)
-	var timeout int32 = 0
+	var timeout int32
+	atomic.StoreInt32(&timeout, 0)
 	go func() {
 		time.Sleep(1000 * time.Millisecond)
 		atomic.StoreInt32(&timeout, 1)
@@ -83,18 +85,21 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 }
 
+// Except handling Put and Append operations, the main logic is similar to Get function
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	if kv.killed() {
 		reply.Err = ErrServerDead
 		return
 	}
+	kv.mu.Lock()
 	var operationType int
 	if args.Op == "Put" {
 		operationType = PUT
 	} else if args.Op == "Append" {
 		operationType = APPEND
 	}
+	kv.mu.Unlock()
 	_, _, isLeader := kv.rf.Start(Op{
 		OperationType:  operationType,
 		Key:            args.Key,
@@ -107,7 +112,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 	DPrintf(false, "server-[%d] PutAppend Command, ClientId = %d, Seq = %d, Key = %s, Val = %s, Op = %s", kv.me, args.ClientId, args.SequenceNumber, args.Key, args.Value, args.Op)
-	var timeout int32 = 0
+	var timeout int32
+	atomic.StoreInt32(&timeout, 0)
 	go func() {
 		time.Sleep(1000 * time.Millisecond)
 		atomic.StoreInt32(&timeout, 1)
@@ -123,7 +129,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			DPrintf(false, "server-[%d] PutAppend Command %s", kv.me, OK)
 			return
 		}
-		kv.mu.Unlock()	
+		kv.mu.Unlock()
 	}
 }
 
@@ -171,10 +177,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+
 	kv.data = make(map[string]string)
 	kv.maxSequenceNumbers = make(map[int64]int64)
 
 	// You may need initialization code here.
+	kv.mu.Lock()
 	var data map[string]string
 	var maxSequenceNumbers map[int64]int64
 	var applyIndex int
@@ -183,7 +191,20 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
 	// Don't find error
-	if d.Decode(&data) == nil && d.Decode(&maxSequenceNumbers) == nil && d.Decode(&applyIndex) == nil {
+	err1 := d.Decode(&data)
+	err2 := d.Decode(&maxSequenceNumbers)
+	err3 := d.Decode(&applyIndex)
+	kv.mu.Unlock()
+	if err1 != nil {
+		DPrintf(false, "server-[%d] StartKVServer decode data error = %v", kv.me, err1)
+	}
+	if err2 != nil {
+		DPrintf(false, "server-[%d] StartKVServer decode maxSequenceNumbers error = %v", kv.me, err2)
+	}
+	if err3 != nil {
+		DPrintf(false, "server-[%d] StartKVServer decode applyIndex error = %v", kv.me, err3)
+	}
+	if err1 == nil && err2 == nil && err3 == nil {
 		kv.mu.Lock()
 		kv.data = data
 		kv.maxSequenceNumbers = maxSequenceNumbers
@@ -204,18 +225,28 @@ func (kv *KVServer) receiveMsg() {
 		DPrintf(false, "server-[%d], msg receive = %v, raftStateSize = %d", kv.me, msg, kv.rf.RaftStateSize())
 		// Command log
 		if msg.CommandValid {
-			op := msg.Command.(Op) // type assertion
 			kv.mu.Lock()
-			kv.doOperation(op)
+			op := msg.Command.(Op) // type assertion
 			kv.applyIndex = msg.CommandIndex
+			kv.doOperation(op)
 			kv.mu.Unlock()
 		} else if msg.SnapshotValid {
 			// Snapshot command
+			kv.mu.Lock()
 			var data map[string]string
 			var maxSequenceNumbers map[int64]int64
 			r := bytes.NewBuffer(msg.Snapshot)
 			d := labgob.NewDecoder(r)
-			if d.Decode(&data) == nil && d.Decode(&maxSequenceNumbers) == nil {
+			err1 := d.Decode(&data)
+			err2 := d.Decode(&maxSequenceNumbers)
+			kv.mu.Unlock()
+			if err1 != nil {
+				DPrintf(true, "server-[%d] receiveMsg decode data error = %v", kv.me, err1)
+			}
+			if err2 != nil {
+				DPrintf(true, "server-[%d] receiveMsg decode maxSequenceNumbers error = %v", kv.me, err2)
+			}
+			if err1 == nil && err2 == nil {
 				kv.mu.Lock()
 				// replace local server state with snapshot data
 				kv.data = data
@@ -228,7 +259,36 @@ func (kv *KVServer) receiveMsg() {
 }
 
 // check raft's logs current size periodically, and compact logs if hit the threshold
-func (kv *KVServer) trySnapshot() {}
+func (kv *KVServer) trySnapshot() {
+	for !kv.killed() {
+		// 如果raft日志长度大于阀值，利用snapshot压缩日志
+		if kv.maxraftstate > 0 && kv.rf.RaftStateSize() > kv.maxraftstate*8/10 {
+			// if kv.rf.RaftStateSize() > kv.maxraftstate*8 {
+			// 	DPrintf(false, "kv-RaftStateSize = %d, kv.applyIndex = %d", kv.rf.RaftStateSize(), kv.applyIndex)
+			// }
+			kv.mu.Lock()
+			w := new(bytes.Buffer)
+			e := labgob.NewEncoder(w)
+			err1:=e.Encode(kv.data)
+			err2:=e.Encode(kv.maxSequenceNumbers)
+			err3:=e.Encode(kv.applyIndex)
+			if err1 != nil {
+				DPrintf(true, "server-[%d] trySnapshot encode data error = %v", kv.me, err1)
+			}
+			if err2 != nil {
+				DPrintf(true, "server-[%d] trySnapshot encode maxSequenceNumbers error = %v", kv.me, err2)
+			}
+			if err3 != nil {
+				DPrintf(true, "server-[%d] trySnapshot encode applyIndex error = %v", kv.me, err3)
+			}
+			applyIndex := kv.applyIndex // 当前已运行的最大操作序号
+			snapshot := w.Bytes()       // sever run state
+			kv.rf.Snapshot(applyIndex, snapshot)
+			kv.mu.Unlock()
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
 
 // according to the operation type, do the corresponding operation
 func (kv *KVServer) doOperation(op Op) {
@@ -246,3 +306,4 @@ func (kv *KVServer) doOperation(op Op) {
 		kv.data[op.Key] += op.Val
 	}
 }
+

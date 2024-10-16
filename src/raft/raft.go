@@ -42,8 +42,8 @@ const (
 	CANDIDATE              = 2
 	FOLLOWER               = 3
 	BROADCAST_TIME         = 100 // 限制为每秒十次心跳
-	ELECTION_TIMEOUT_BASE  = 250 // broadcastTime < electionTimeout ≪ MTBF
-	ELECTION_TIMEOUT_RANGE = 250
+	ELECTION_TIMEOUT_BASE  = 300 // broadcastTime < electionTimeout ≪ MTBF
+	ELECTION_TIMEOUT_RANGE = 200
 )
 
 type ApplyMsg struct {
@@ -74,7 +74,10 @@ type Raft struct {
 
 	applyCh          chan ApplyMsg // 用于发送提交日志的channel
 	cond             *sync.Cond    // 唤醒线程
-	quickCommitCheck int32         // 当leader开始处理日志时，快速检查是否有新日志需要提交，加速CommitIndex的更新，提高日志提交的及时性
+	
+	// Lab3：Client 发送的 operation 要在三分之一心跳间隔内提交
+	// 为了快速提交日志，leader需要在 Start() 时立即向follower发送日志，并在发送后即刻更新 CommitIndex，从而加速CommitIndex的更新
+	quickCommitCheck int32
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -125,6 +128,8 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 	// persist CurrentTerm, VotedFor, Log, LastIncludedIndex, LastIncludedTerm
+
+	// Don't need to add lock, because it's called by other functions with lock
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.CurrentTerm)
@@ -155,6 +160,8 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+
+	// Need to add lock, because it's called by other functions without lock
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	r := bytes.NewBuffer(data)
@@ -211,10 +218,9 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		rf.mu.Unlock()
 		return
 	}
+	// 2. log compaction
 	rf.DPrintf(false, "rf-[%d] Call Snapshot(), index = %d", rf.me, index)
 	rf.LastIncludedTerm = rf.GetLogEntry(index).Term
-
-	// 2. log compaction
 	var log []LogEntry
 	// check the boundary , it may lead to index out of range😄
 	for i := index + 1; i <= rf.GetLastLogEntry().Index; i++ {
@@ -574,7 +580,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.persist()
 	rf.mu.Unlock()
 	rf.DPrintf(false, "rf-[%d] Start(), Index = %d, Term = %d, Command = %d", rf.me, logEntry.Index, logEntry.Term, logEntry.Command)
-	// leader一开始要更频繁地发送日志条目 / 心跳
+	
+	// Lab3: leader一开始要快速提交Client发送的Operation，以便通过速度测试
 	atomic.StoreInt32(&rf.quickCommitCheck, 20)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
@@ -608,15 +615,14 @@ func (rf *Raft) killed() bool {
 // heartsBeats recently.
 func (rf *Raft) ticker() {
 	// 循环执行raft集群任务
-	for rf.killed() == false {
+	for !rf.killed()  {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 		rf.updateLastApplied()
-		// role需要加锁，可能会被多个Goroutine访问
-		rf.mu.Lock()
-		role := rf.Role
-		rf.mu.Unlock()
+		// role可能会被多个Goroutine读写访问，需要加锁 / 原子操作
+		var role int32
+		atomic.StoreInt32(&role, int32(rf.Role))
 		// 在任务函数中处理完元数据 / 在耗时操作前 记得解锁，防止死锁
 		switch role {
 		case LEADER:
@@ -654,7 +660,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.cond = sync.NewCond(&rf.mu)
 	// Your initialization code here (2A, 2B, 2C).
 
-	rf.DPrintf(false, "rf-[%d] is Making, Len(peers) = %d\n", me, len(peers))
+	rf.DPrintf(false, "rf-[%d] is Making, Len(peers) = %d", me, len(peers))
 	rf.BroadcastTime = BROADCAST_TIME
 	rf.ElectionTimeout = GetElectionTimeout() // 初始化，随机选举超时
 	rf.Role = FOLLOWER                        // 初始化为follower
@@ -676,18 +682,20 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 /*
 * atomic operation, don't need to add lock
-* 1. 初始阶段快速提交
-* 	一开始leader需要更频繁地发送日志条目 / 心跳，确保日志尽快复制到大多数followers
-* 2. 稳定阶段正常提交
+* 1. Lab3：初始阶段快速提交 
+* 	一开始leader需要更快速地提交Client发送的Operations，休眠时间更短，以便通过速度测试
+* 2. Lab2：稳定阶段正常提交
 * 	当日志被大多数follower复制时，leader恢复到正常心跳频率
-* 3. quickCommitCheck只能递减，因为只有初期才需要
+* 3. quickCommitCheck只能递减，因为只有初期快速提交才需要
  */
 func (rf *Raft) doLeaderTask() {
+	// Lab3
 	if atomic.LoadInt32(&rf.quickCommitCheck) > 0 {
 		rf.updateCommitIndex()
 		time.Sleep(time.Millisecond) // 快速提交阶段，强制睡眠
 		atomic.AddInt32(&rf.quickCommitCheck, -1)
 	} else {
+		// Lab2
 		rf.trySendEntries(false) // false代表是否为leader第一次发送日志
 		rf.updateCommitIndex()
 		time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond) // 强制睡眠，实现心跳间隔
@@ -708,7 +716,7 @@ func (rf *Raft) doFollowerTask() bool {
 	// 未超时，继续等待
 	rf.ElectionTimeout -= rf.BroadcastTime
 	rf.mu.Unlock()
-	time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond) // 心跳间隔睡眠
+	time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond) // 心跳间隔
 	return false
 }
 
@@ -759,7 +767,7 @@ func (rf *Raft) doCandidateTask() {
 					return
 				}
 				rf.mu.Lock()
-				defer rf.mu.Unlock()
+				defer rf.mu.Unlock() // only lock in goroutine
 				// check 选票
 				if reply.VoteGranted {
 					votesGet++
@@ -775,9 +783,9 @@ func (rf *Raft) doCandidateTask() {
 			}(i)
 		}
 	}
-	// State2：在主线程中，candidate运行超时唤醒goroutine，将ElectionTimeout原子置1，并唤醒主线程提醒超时
-	var timeout rune
-	go func(electionTimeout int, timeout *rune) {
+	// State2：在主线程中运行超时goroutine，检测candidate是否运行超时，将timeout原子置1记录，并唤醒主线程提醒超时
+	var timeout int32
+	go func(electionTimeout int, timeout *int32) {
 		time.Sleep(time.Duration(electionTimeout) * time.Millisecond)
 		atomic.StoreInt32(timeout, 1)
 		rf.cond.Broadcast()
@@ -863,7 +871,6 @@ func (rf *Raft) updateCommitIndex() {
  */
 func (rf *Raft) updateLastApplied() {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	rf.LastApplied = Max(rf.LastApplied, rf.LastIncludedIndex)
 	// 防止发送被日志压缩删除的条目：LastApplied >= LastIncludedIndex
 	for rf.LastApplied < rf.CommitIndex && rf.LastApplied < rf.GetLastLogEntry().Index && rf.LastApplied >= rf.LastIncludedIndex {
@@ -876,9 +883,10 @@ func (rf *Raft) updateLastApplied() {
 		rf.mu.Unlock()
 		rf.applyCh <- msg
 		rf.mu.Lock()
-		rf.DPrintf(false, "[%d] apply msg [%d] success", rf.me, rf.LastApplied+1)
 		rf.LastApplied++
+		rf.DPrintf(false, "[%d] apply msg [%d] success", rf.me, rf.LastApplied+1)
 	}
+	rf.mu.Unlock()
 }
 
 // 尝试执行心跳rpc / 日志复制 / 快照复制
