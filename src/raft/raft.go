@@ -72,9 +72,9 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	applyCh          chan ApplyMsg // 用于发送提交日志的channel
-	cond             *sync.Cond    // 唤醒线程
-	
+	applyCh chan ApplyMsg // 用于发送提交日志的channel
+	cond    *sync.Cond    // 唤醒线程
+
 	// Lab3：Client 发送的 operation 要在三分之一心跳间隔内提交
 	// 为了快速提交日志，leader需要在 Start() 时立即向follower发送日志，并在发送后即刻更新 CommitIndex，从而加速CommitIndex的更新
 	quickCommitCheck int32
@@ -130,6 +130,7 @@ func (rf *Raft) persist() {
 	// persist CurrentTerm, VotedFor, Log, LastIncludedIndex, LastIncludedTerm
 
 	// Don't need to add lock, because it's called by other functions with lock
+	// RaftState 包含的data，其中rf.Log会随运行时间膨胀，所以要压缩
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.CurrentTerm)
@@ -137,8 +138,8 @@ func (rf *Raft) persist() {
 	e.Encode(rf.Log)
 	e.Encode(rf.LastIncludedIndex)
 	e.Encode(rf.LastIncludedTerm)
-	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
+	raftstate := w.Bytes()
+	rf.persister.SaveRaftState(raftstate)
 	rf.DPrintf(false, "rf-[%d] call persist(), CurrentTerm = %d, VotedFor = %d, LogLength = %d, LastIncludedIndex = %d, LastIncludedTerm = %d", rf.me, rf.CurrentTerm, rf.VotedFor, len(rf.Log), rf.LastIncludedIndex, rf.LastIncludedTerm)
 }
 
@@ -208,6 +209,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
+// FIXME: 性能瓶颈会是在Snapshot吗？
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	// delete log entries whose index <= arg's index
@@ -220,14 +222,14 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	}
 	// 2. log compaction
 	rf.DPrintf(false, "rf-[%d] Call Snapshot(), index = %d", rf.me, index)
-	rf.LastIncludedTerm = rf.GetLogEntry(index).Term
 	var log []LogEntry
-	// check the boundary , it may lead to index out of range😄
+	// FIXME:check the boundary , it may lead to index out of range😄
 	for i := index + 1; i <= rf.GetLastLogEntry().Index; i++ {
 		log = append(log, rf.GetLogEntry(i))
 	}
-	rf.Log = log
+	rf.LastIncludedTerm = rf.GetLogEntry(index).Term // 要在替换日志前操作，否则会越界
 	rf.LastIncludedIndex = index // update lastIncludedIndex
+	rf.Log = log
 
 	// 3. state change, persist log
 	w := new(bytes.Buffer)
@@ -237,9 +239,9 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	e.Encode(rf.Log)
 	e.Encode(rf.LastIncludedIndex)
 	e.Encode(rf.LastIncludedTerm)
-	state := w.Bytes()
+	raftstate := w.Bytes()
 	// persist current state and snapshot
-	rf.persister.SaveStateAndSnapshot(state, snapshot)
+	rf.persister.SaveStateAndSnapshot(raftstate, snapshot)
 	rf.mu.Unlock()
 }
 
@@ -282,7 +284,7 @@ type AppendEntriesReply struct {
 	XLen   int // length of the conflicting entry
 }
 
-// snapshot RPC
+// NOTE: snapshot RPC, raftstate's parameters, not snapshots
 type InstallSnapshotArgs struct {
 	Term              int
 	LeaderId          int
@@ -462,11 +464,13 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	e.Encode(rf.Log)
 	e.Encode(rf.LastIncludedIndex)
 	e.Encode(rf.LastIncludedTerm)
-	state := w.Bytes()
-	rf.persister.SaveStateAndSnapshot(state, args.Snapshot)
+	raftstate := w.Bytes()
+	rf.persister.SaveStateAndSnapshot(raftstate, args.Snapshot)
+
 	rf.LastIncludedIndex = args.LastIncludedIndex
 	rf.LastIncludedTerm = args.LastIncludedTerm
 	lastLogEntry := rf.GetLastLogEntry()
+
 	// 3. If  agrs.LastIncludedIndex < local LastIncludedIndex, delete log entries whose index <= args.LastIncludedIndex
 	// And use ApplyMsg to send snapshot to applyCh in order to apply snapshot in state machine
 	if args.LastIncludedIndex < lastLogEntry.Index {
@@ -559,7 +563,7 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
-// 客户端向Raft服务器发送命令command
+// Client向Raft Server发送命令command
 
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
@@ -580,7 +584,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.persist()
 	rf.mu.Unlock()
 	rf.DPrintf(false, "rf-[%d] Start(), Index = %d, Term = %d, Command = %d", rf.me, logEntry.Index, logEntry.Term, logEntry.Command)
-	
+
 	// Lab3: leader一开始要快速提交Client发送的Operation，以便通过速度测试
 	atomic.StoreInt32(&rf.quickCommitCheck, 20)
 	for i := 0; i < len(rf.peers); i++ {
@@ -615,14 +619,16 @@ func (rf *Raft) killed() bool {
 // heartsBeats recently.
 func (rf *Raft) ticker() {
 	// 循环执行raft集群任务
-	for !rf.killed()  {
+	for !rf.killed() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 		rf.updateLastApplied()
-		// role可能会被多个Goroutine读写访问，需要加锁 / 原子操作
-		var role int32
-		atomic.StoreInt32(&role, int32(rf.Role))
+		// role可能会被多个Goroutine读写访问，需要加锁
+		// NOTE: atomic.StoreInt32(&role,int32(rf.Role)) 仅能保证赋值操作是原子的，不能保证rf.Role的读取是原子的 
+		rf.mu.Lock()
+		role:=rf.Role
+		rf.mu.Unlock()
 		// 在任务函数中处理完元数据 / 在耗时操作前 记得解锁，防止死锁
 		switch role {
 		case LEADER:
@@ -674,7 +680,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	// start ticker goroutine to start elections
+	// keep running ticker goroutine for  elections
 	go rf.ticker()
 
 	return rf
@@ -682,7 +688,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 /*
 * atomic operation, don't need to add lock
-* 1. Lab3：初始阶段快速提交 
+* 1. Lab3：初始阶段快速提交
 * 	一开始leader需要更快速地提交Client发送的Operations，休眠时间更短，以便通过速度测试
 * 2. Lab2：稳定阶段正常提交
 * 	当日志被大多数follower复制时，leader恢复到正常心跳频率
@@ -1041,20 +1047,15 @@ func (rf *Raft) sendEntries(server int, newEntriesFlag bool) {
 // leader send snapshot to follower
 func (rf *Raft) sendSnapshot(server int) {
 	rf.mu.Lock()
-	currentTerm := rf.CurrentTerm
-	leaderId := rf.me
-	lastIncludedIndex := rf.LastIncludedIndex
-	lastIncludedTerm := rf.LastIncludedTerm
-	snapshot := rf.persister.snapshot
 	args := InstallSnapshotArgs{
-		Term:              currentTerm,
-		LeaderId:          leaderId,
-		LastIncludedIndex: lastIncludedIndex,
-		LastIncludedTerm:  lastIncludedTerm,
-		Snapshot:          snapshot,
+		Term:              rf.CurrentTerm,
+		LeaderId:          rf.me,
+		LastIncludedIndex: rf.LastIncludedIndex,
+		LastIncludedTerm:  rf.LastIncludedTerm,
+		Snapshot:          rf.persister.snapshot,
 	}
 	reply := InstallSnapshotReply{}
-	rf.DPrintf(false, "rf-[%d] sendSnapshot to rf-[%d], LastIncludedIndex = %d", leaderId, server, lastIncludedIndex)
+	rf.DPrintf(false, "rf-[%d] sendSnapshot to rf-[%d], LastIncludedIndex = %d", rf.me, server, rf.LastIncludedIndex)
 	rf.mu.Unlock()
 	if !rf.sendInstallSnapshot(server, &args, &reply) {
 		return

@@ -1,0 +1,13 @@
+
+- [x] Lab 1: MapReduce
+- [x]  Lab2: Raft
+  - [x] Lab2A: Leader Election
+  - [x] Lab2B: Log
+  - [x] Lab2C: Persistence
+  - [x] Lab2D: Log Compaction
+- [ ] Lab 3: Fault-tolerant Key/Value Service
+  - [x] Lab3A: Key/Value Service Without Snapshots
+  - [ ] Lab3B: Key/Value Service With Snapshots (Currently working on)
+- [ ] Lab 4: Sharded Key/Value Service
+  - [ ] Lab4A: The Shard Controller
+  - [ ] Lab4B: Sharded Key/Value Server

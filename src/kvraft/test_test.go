@@ -709,6 +709,9 @@ func TestSnapshotRecover3B(t *testing.T) {
 
 func TestSnapshotRecoverManyClients3B(t *testing.T) {
 	// Test: restarts, snapshots, many clients (3B) ...
+	// BUG: log were not trimmed in this test
+	// NOTE: maxraftstate indicates the maximum of  servers' raftstate(including the log),  but not including K/V Sever snapshots
+	// Client的数量是20个，所以quickCommitCheck设置为20
 	GenericTest(t, "3B", 20, 5, false, true, false, 1000, false)
 }
 

@@ -3,7 +3,7 @@ package kvraft
 import "log"
 
 const (
-	Debug= true
+	Debug          = true
 	NONE           = -1
 	GET            = 0
 	PUT            = 1
@@ -12,7 +12,7 @@ const (
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrServerDead  = "ErrServerDead"
-	ErrRaftTimeout     = "ErrRaftTimeout"
+	ErrTimeout     = "ErrTimeout"
 )
 
 func DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
@@ -35,8 +35,8 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	ClientId       int64
-	SequenceNumber int64
+	ClientId    int64
+	SequenceNum int64
 }
 
 type PutAppendReply struct {
@@ -47,8 +47,8 @@ type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
 	// mark client's operation
-	ClientId       int64
-	SequenceNumber int64
+	ClientId    int64
+	SequenceNum int64
 }
 
 type GetReply struct {

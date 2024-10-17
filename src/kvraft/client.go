@@ -8,13 +8,14 @@ import (
 	"6.824/labrpc"
 )
 
+// 感觉clerk不会有并发问题？
 type Clerk struct {
 	servers []*labrpc.ClientEnd // client terminals
 	// You will have to modify this struct.
 	leaderId int // raft leader peer id, to avoid researching leader every time
 	// cliendId and sequenceNumber are used to identify the client's operation
-	clientId       int64
-	sequenceNumber int64 // 单调递增
+	clientId    int64
+	sequenceNum int64 // 单调递增
 }
 
 func nrand() int64 {
@@ -30,7 +31,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	// You'll have to add code here.
 	ck.leaderId = NONE
 	ck.clientId = nrand()
-	ck.sequenceNumber = 0
+	atomic.StoreInt64(&ck.sequenceNum, 0)
 	return ck
 }
 
@@ -49,13 +50,13 @@ func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
 	DPrintf(false, "[clerk-start] Client try to Get Key = %s", key)
-	atomic.AddInt64(&ck.sequenceNumber, 1) // mark client's operation
+	atomic.AddInt64(&ck.sequenceNum, 1) // mark client's operation
 	// If leaderId is not -1, try to send Get RPC to the leader
 	if ck.leaderId != NONE {
 		args := GetArgs{
-			Key:            key,
-			ClientId:       ck.clientId,
-			SequenceNumber: ck.sequenceNumber,
+			Key:         key,
+			ClientId:    ck.clientId,
+			SequenceNum: ck.sequenceNum,
 		}
 		reply := GetReply{}
 		ok := ck.servers[ck.leaderId].Call("KVServer.Get", &args, &reply)
@@ -69,9 +70,9 @@ func (ck *Clerk) Get(key string) string {
 	for {
 		for i := range ck.servers {
 			args := GetArgs{
-				Key:            key,
-				ClientId:       ck.clientId,
-				SequenceNumber: ck.sequenceNumber,
+				Key:         key,
+				ClientId:    ck.clientId,
+				SequenceNum: ck.sequenceNum,
 			}
 			reply := GetReply{}
 			ok := ck.servers[i].Call("KVServer.Get", &args, &reply)
@@ -95,15 +96,15 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
 	DPrintf(false, "[clerk-start] Client try to PutAppend, key = %s, val = %s, op = %s", key, value, op)
-	atomic.AddInt64(&ck.sequenceNumber, 1) // mark client's operation
+	atomic.AddInt64(&ck.sequenceNum, 1) // mark client's operation
 	// If leaderId is not -1, try to send PutAppend RPC to the leader
 	if ck.leaderId != NONE {
 		args := PutAppendArgs{
-			Key:            key,
-			Value:          value,
-			Op:             op,
-			ClientId:       ck.clientId,
-			SequenceNumber: ck.sequenceNumber,
+			Key:         key,
+			Value:       value,
+			Op:          op,
+			ClientId:    ck.clientId,
+			SequenceNum: ck.sequenceNum,
 		}
 		reply := PutAppendReply{}
 		ok := ck.servers[ck.leaderId].Call("KVServer.PutAppend", &args, &reply)
@@ -116,11 +117,11 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	for {
 		for i := range ck.servers {
 			args := PutAppendArgs{
-				Key:            key,
-				Value:          value,
-				Op:             op,
-				ClientId:       ck.clientId,
-				SequenceNumber: ck.sequenceNumber,
+				Key:         key,
+				Value:       value,
+				Op:          op,
+				ClientId:    ck.clientId,
+				SequenceNum: ck.sequenceNum,
 			}
 			reply := PutAppendReply{}
 			ok := ck.servers[i].Call("KVServer.PutAppend", &args, &reply)

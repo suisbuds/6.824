@@ -253,6 +253,8 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 					xlog = append(xlog, cfg.logs[i][j])
 				}
 				e.Encode(xlog)
+				// 在Lab2里，由测试充当sever端，填充snapshot
+				// 在Lab3里，则是由自建的K/V Server填充snapshot
 				rf.Snapshot(m.CommandIndex, w.Bytes())
 			}
 		} else {
