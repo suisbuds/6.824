@@ -37,30 +37,6 @@
 # By now, you know everything that happens below.
 # If you still want to read the code, go ahead.
 
-# 路径变量
-SCRIPT_DIR=$(dirname "$(realpath "$0")")
-OUTPUT_DIR="$SCRIPT_DIR/../../output"
-
-# Default to no race detection unless otherwise specified
-race=""
-if [ $# -gt 3 ]; then
-	if [ "$4" = "-race" ]; then
-		race="-race"
-	fi
-fi
-
-if [ $# -eq 1 ] && [ "$1" = "--help" ]; then
-	echo "Usage: $0 [RUNS=100] [PARALLELISM=#cpus] [TESTPATTERN=''] [RACE=#-race]"
-	exit 1
-fi
-
-# If the tests don't even build, don't bother. Also, this gives us a static
-# tester binary for higher performance and higher reproducability.
-if ! go test $race -c -o $OUTPUT_DIR/tester; then
-	echo -e "\e[1;31mERROR: Build failed\e[0m"
-	exit 1
-fi
-
 # Default to 100 runs unless otherwise specified
 runs=100
 if [ $# -gt 0 ]; then
@@ -79,13 +55,46 @@ if [ $# -gt 2 ]; then
 	test="$3"
 fi
 
+label="$test"
+
+# 路径变量
+SCRIPT_DIR=$(dirname "$(realpath "$0")")
+OUTPUT_DIR="$SCRIPT_DIR/../../output"
+
+# Default to no race detection unless otherwise specified
+race=""
+if [ $# -gt 3 ]; then
+	if [ "$4" = "-race" ]; then
+		race="-race"
+	fi
+fi
+
+prefix=0
+while [ -e "$OUTPUT_DIR/tester-${prefix}-${label}" ]; do
+    ((prefix++))
+done
+
+
+if [ $# -eq 1 ] && [ "$1" = "--help" ]; then
+	echo "Usage: $0 [RUNS=100] [PARALLELISM=#cpus] [TESTPATTERN=''] [RACE=#-race]"
+	exit 1
+fi
+
+# If the tests don't even build, don't bother. Also, this gives us a static
+# tester binary for higher performance and higher reproducability.
+if ! go test $race -c -o $OUTPUT_DIR/tester-${prefix}-${label}; then
+	echo -e "\e[1;31mERROR: Build failed\e[0m"
+	exit 1
+fi
+
+
 # Figure out where we left off
-logs=$(find $OUTPUT_DIR -maxdepth 1 -name 'test-*.log' -type f -printf '.' | wc -c)
+logs=$(find $OUTPUT_DIR -maxdepth 1 -name 'test-${prefix}-${label}-*.log' -type f -printf '.' | wc -c)
 if [ "$logs" -eq 0 ]; then
 	success=0
 	failed=0
 else
-	success=$(grep -E '^PASS$' $OUTPUT_DIR/test-*.log | wc -l)
+	success=$(grep -E '^PASS$' $OUTPUT_DIR/test-${prefix}-${label}-*.log | wc -l)
 	((failed = logs - success))
 fi
 
@@ -125,7 +134,7 @@ cleanup() {
 	for pid in "${waits[@]}"; do
 		kill "$pid"
 		wait "$pid"
-		rm -rf "$OUTPUT_DIR/test-${is[0]}.err" "$OUTPUT_DIR/test-${is[0]}.log"
+		rm -rf "$OUTPUT_DIR/test-${prefix}-${label}-${is[0]}.err" "$OUTPUT_DIR/test-${prefix}-${label}-${is[0]}.log"
 		is=("${is[@]:1}")
 	done
 	exit 0
@@ -149,10 +158,10 @@ for i in $(seq "$((success + failed + 1))" "$runs"); do
 
 	# Run the tester, passing -test.run if necessary
 	if [[ -z "$test" ]]; then
-		$OUTPUT_DIR/tester -test.v 2>"$OUTPUT_DIR/test-${i}.err" >"$OUTPUT_DIR/test-${i}.log" &
+		$OUTPUT_DIR/tester-${prefix}-${label} -test.v 2>"$OUTPUT_DIR/test-${prefix}-${label}-${i}.err" >"$OUTPUT_DIR/test-${prefix}-${label}-${i}.log" &
 		pid=$!
 	else
-		$OUTPUT_DIR/tester -test.run "$test" -test.v 2>"$OUTPUT_DIR/test-${i}.err" >"$OUTPUT_DIR/test-${i}.log" &
+		$OUTPUT_DIR/tester-${prefix}-${label} -test.run "$test" -test.v 2>"$OUTPUT_DIR/test-${prefix}-${label}-${i}.err" >"$OUTPUT_DIR/test-${prefix}-${label}-${i}.log" &
 		pid=$!
 	fi
 
