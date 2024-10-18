@@ -6,7 +6,7 @@
 #
 # Normally, you should be able to execute this script with
 #
-#   ./go-test-many.sh	
+#   ./go-test-many.sh
 #
 # and it should do The Right Thing(tm) by default. However, it does take some
 # arguments so that you can tweak it for your testing setup. To understand
@@ -37,14 +37,26 @@
 # By now, you know everything that happens below.
 # If you still want to read the code, go ahead.
 
+# 路径变量
+SCRIPT_DIR=$(dirname "$(realpath "$0")")
+OUTPUT_DIR="$SCRIPT_DIR/../../output"
+
+# Default to no race detection unless otherwise specified
+race=""
+if [ $# -gt 3 ]; then
+	if [ "$4" = "-race" ]; then
+		race="-race"
+	fi
+fi
+
 if [ $# -eq 1 ] && [ "$1" = "--help" ]; then
-	echo "Usage: $0 [RUNS=100] [PARALLELISM=#cpus] [TESTPATTERN='']"
+	echo "Usage: $0 [RUNS=100] [PARALLELISM=#cpus] [TESTPATTERN=''] [RACE=#-race]"
 	exit 1
 fi
 
 # If the tests don't even build, don't bother. Also, this gives us a static
 # tester binary for higher performance and higher reproducability.
-if ! go test -c -o ./output/tester; then
+if ! go test $race -c -o $OUTPUT_DIR/tester; then
 	echo -e "\e[1;31mERROR: Build failed\e[0m"
 	exit 1
 fi
@@ -68,22 +80,22 @@ if [ $# -gt 2 ]; then
 fi
 
 # Figure out where we left off
-logs=$(find /home/sulis/Documents/6.824/src/raft/output -maxdepth 1 -name 'test-*.log' -type f -printf '.' | wc -c)
+logs=$(find $OUTPUT_DIR -maxdepth 1 -name 'test-*.log' -type f -printf '.' | wc -c)
 if [ "$logs" -eq 0 ]; then
-    success=0
-    failed=0
+	success=0
+	failed=0
 else
-    success=$(grep -E '^PASS$' /home/sulis/Documents/6.824/src/raft/output/test-*.log | wc -l)
-    ((failed = logs - success))
+	success=$(grep -E '^PASS$' $OUTPUT_DIR/test-*.log | wc -l)
+	((failed = logs - success))
 fi
 
 # Finish checks the exit status of the tester with the given PID, updates the
 # success/failed counters appropriately, and prints a pretty message.
 finish() {
 	if ! wait "$1"; then
-		if command -v notify-send >/dev/null 2>&1 &&((failed == 0)); then
+		if command -v notify-send >/dev/null 2>&1 && ((failed == 0)); then
 			notify-send -i weather-storm "Tests started failing" \
-				"$(pwd)\n$(grep FAIL: -- /home/sulis/Documents/6.824/src/raft/output/*.log | sed -e 's/.*FAIL: / - /' -e 's/ (.*)//' | sort -u)"
+				"$(pwd)\n$(grep FAIL: -- $OUTPUT_DIR/*.log | sed -e 's/.*FAIL: / - /' -e 's/ (.*)//' | sort -u)"
 		fi
 		((failed += 1))
 	else
@@ -91,16 +103,17 @@ finish() {
 	fi
 
 	if [ "$failed" -eq 0 ]; then
-		printf "\e[1;32m";
+		printf "\e[1;32m" # green
 	else
-		printf "\e[1;31m";
+		printf "\e[1;31m" # red
 	fi
 
-	printf "Done %03d/%d; %d ok, %d failed\n\e[0m" \
-		$((success+failed)) \
+	printf "Done %03d/%d; %d ok, %d failed%s\n\e[0m" \
+		$((success + failed)) \
 		"$runs" \
 		"$success" \
-		"$failed"
+		"$failed" \
+		"${race:+ (with -race)}"
 }
 
 waits=() # which tester PIDs are we waiting on?
@@ -112,7 +125,7 @@ cleanup() {
 	for pid in "${waits[@]}"; do
 		kill "$pid"
 		wait "$pid"
-		rm -rf "/home/sulis/Documents/6.824/src/raft/output/test-${is[0]}.err" "/home/sulis/Documents/6.824/src/raft/output/test-${is[0]}.log"
+		rm -rf "$OUTPUT_DIR/test-${is[0]}.err" "$OUTPUT_DIR/test-${is[0]}.log"
 		is=("${is[@]:1}")
 	done
 	exit 0
@@ -120,7 +133,7 @@ cleanup() {
 trap cleanup SIGHUP SIGINT SIGTERM
 
 # Run remaining iterations (we may already have run some)
-for i in $(seq "$((success+failed+1))" "$runs"); do
+for i in $(seq "$((success + failed + 1))" "$runs"); do
 	# If we have already spawned the max # of testers, wait for one to
 	# finish. We'll wait for the oldest one beause it's easy.
 	if [[ ${#waits[@]} -eq "$parallelism" ]]; then
@@ -136,10 +149,10 @@ for i in $(seq "$((success+failed+1))" "$runs"); do
 
 	# Run the tester, passing -test.run if necessary
 	if [[ -z "$test" ]]; then
-		./output/tester -test.v 2> "/home/sulis/Documents/6.824/src/raft/output/test-${i}.err" > "/home/sulis/Documents/6.824/src/raft/output/test-${i}.log" &
+		$OUTPUT_DIR/tester -test.v 2>"$OUTPUT_DIR/test-${i}.err" >"$OUTPUT_DIR/test-${i}.log" &
 		pid=$!
 	else
-		./output/tester -test.run "$test" -test.v 2> "/home/sulis/Documents/6.824/src/raft/output/test-${i}.err" > "/home/sulis/Documents/6.824/src/raft/output/test-${i}.log" &
+		$OUTPUT_DIR/tester -test.run "$test" -test.v 2>"$OUTPUT_DIR/test-${i}.err" >"$OUTPUT_DIR/test-${i}.log" &
 		pid=$!
 	fi
 
@@ -152,8 +165,7 @@ for pid in "${waits[@]}"; do
 	finish "$pid"
 done
 
-if ((failed>0)); then
+if ((failed > 0)); then
 	exit 1
 fi
 exit 0
-

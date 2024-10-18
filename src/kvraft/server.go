@@ -249,10 +249,10 @@ func (kv *KVServer) trySnapshot() {
 
 	for !kv.killed() {
 		// 如果raft日志长度大于阀值，利用snapshot压缩日志
-		if kv.maxraftstate > 0 && kv.rf.RaftStateSize() > kv.maxraftstate*8/10 {
+		if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate {
 			kv.snapshot()
 		}
-		time.Sleep(5*time.Millisecond)
+		time.Sleep(time.Millisecond)
 	}
 }
 

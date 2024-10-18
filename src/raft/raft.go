@@ -209,7 +209,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
-// FIXME: 性能瓶颈会是在Snapshot吗？
+// HACK: 压缩问题会是在Snapshot吗？貌似与index有关
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	// delete log entries whose index <= arg's index
@@ -223,12 +223,12 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// 2. log compaction
 	rf.DPrintf(false, "rf-[%d] Call Snapshot(), index = %d", rf.me, index)
 	var log []LogEntry
-	// FIXME:check the boundary , it may lead to index out of range😄
+	// BUG:check the boundary , it may lead to index out of range😄
 	for i := index + 1; i <= rf.GetLastLogEntry().Index; i++ {
 		log = append(log, rf.GetLogEntry(i))
 	}
 	rf.LastIncludedTerm = rf.GetLogEntry(index).Term // 要在替换日志前操作，否则会越界
-	rf.LastIncludedIndex = index // update lastIncludedIndex
+	rf.LastIncludedIndex = index                     // update lastIncludedIndex
 	rf.Log = log
 
 	// 3. state change, persist log
@@ -278,10 +278,10 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
-	// conflict entry
-	XTerm  int // term in the conflicting entry
-	XIndex int // index of first entry with XTerm
-	XLen   int // length of the conflicting entry
+	XTerm   int // term in the conflicting entry (if any)
+	XIndex  int // index of first entry with XTerm (if any)
+	XLen    int // length of the conflicting entry
+
 }
 
 // NOTE: snapshot RPC, raftstate's parameters, not snapshots
@@ -477,6 +477,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		entry := rf.GetLogEntry(args.LastIncludedIndex)
 		if entry.Term == args.LastIncludedTerm {
 			var log []LogEntry
+			// NOTE:check the boundary 😄
 			for i := entry.Index + 1; i <= lastLogEntry.Index; i++ {
 				log = append(log, rf.GetLogEntry(i))
 			}
@@ -499,7 +500,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	// And use ApplyMsg to send snapshot to applyCh
 	rf.Log = make([]LogEntry, 0)
 	rf.persist()
-	rf.DPrintf(false, "rf-[%d] InstallSnapShot success, LastIncludeIndex = %d, condition: discard all the local logs", rf.me, rf.LastIncludedIndex)
+	rf.DPrintf(false, "rf-[%d] InstallSnapShot Success, LastIncludeIndex = %d, condition: discard all the local logs", rf.me, rf.LastIncludedIndex)
 	rf.mu.Unlock()
 	rf.applyCh <- ApplyMsg{
 		SnapshotValid: true,
@@ -625,9 +626,9 @@ func (rf *Raft) ticker() {
 		// time.Sleep().
 		rf.updateLastApplied()
 		// role可能会被多个Goroutine读写访问，需要加锁
-		// NOTE: atomic.StoreInt32(&role,int32(rf.Role)) 仅能保证赋值操作是原子的，不能保证rf.Role的读取是原子的 
+		// NOTE: atomic.StoreInt32(&role,int32(rf.Role)) 仅能保证赋值操作是原子的，不能保证rf.Role的读取是原子的
 		rf.mu.Lock()
-		role:=rf.Role
+		role := rf.Role
 		rf.mu.Unlock()
 		// 在任务函数中处理完元数据 / 在耗时操作前 记得解锁，防止死锁
 		switch role {
@@ -677,7 +678,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.mu.Unlock()
 
-	// initialize from state persisted before a crash
+	// initialize from state persisted after  crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// keep running ticker goroutine for  elections
@@ -905,14 +906,13 @@ func (rf *Raft) trySendEntries(firstSendEntries bool) {
 		lastLogIndex := rf.GetLastLogEntry().Index
 		rf.mu.Unlock()
 		if i != rf.me {
-			// 成为leader后首次调用
-			// lastLogIndex >= nextIndex，说明本地有新日志需要复制到目标节点
+			// lastLogIndex >= nextIndex，说明leader可能有新日志需要复制 || 成为leader后首次调用
 			if lastLogIndex >= nextIndex || firstSendEntries {
 				// SendEntries更新目标节点日志
 				if firstLogIndex <= nextIndex {
 					go rf.sendEntries(i, true)
 				} else {
-					// SendSnapshot更新目标节点远远落后的日志
+					// SendSnapshot更新落后的目标节点
 					go rf.sendSnapshot(i)
 				}
 			} else {
@@ -936,17 +936,18 @@ func (rf *Raft) trySendEntries(firstSendEntries bool) {
 * In fact, it is a special case of sendEntries, so we can use sendEntries to implement heartbeat
 * newEntriesFlag: true means sendEntries, false means heartbeat
  */
-func (rf *Raft) sendEntries(server int, newEntriesFlag bool) {
+func (rf *Raft) sendEntries(server int, newEntries bool) {
+	// NOTE: 想象滑动窗口
 	finish := false
 	// sendEntries loop or send one heartbeat
 	for !finish {
 		rf.mu.Lock()
-		// 判断当前是否仍为leader
+		// 1. 判断当前是否仍为leader
 		if rf.Role != LEADER {
 			rf.mu.Unlock()
 			return
 		}
-		// 无需要发送的新日志
+		// 2. 无新日志
 		if rf.NextIndex[server] <= rf.LastIncludedIndex {
 			rf.mu.Unlock()
 			return
@@ -958,7 +959,8 @@ func (rf *Raft) sendEntries(server int, newEntriesFlag bool) {
 		entries := rf.Log[prevLogIndex-rf.LastIncludedIndex:]
 		var args AppendEntriesArgs
 		var reply AppendEntriesReply
-		if newEntriesFlag {
+		if newEntries {
+			// SendEntries
 			args = AppendEntriesArgs{
 				Term:              currentTerm,
 				LeaderId:          rf.me,
@@ -970,7 +972,7 @@ func (rf *Raft) sendEntries(server int, newEntriesFlag bool) {
 			rf.DPrintf(false, "rf-[%d] send entries to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]",
 				rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
 		} else {
-			// 无需发送日志，所以不用填充entry
+			// SendHeartbeat
 			args = AppendEntriesArgs{
 				Term:              currentTerm,
 				LeaderId:          rf.me,
@@ -981,14 +983,14 @@ func (rf *Raft) sendEntries(server int, newEntriesFlag bool) {
 			rf.DPrintf(false, "rf-[%d] send heartBeat to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]",
 				rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
 		}
-		finish = true // start appendEntries rpc
+		// 3. AppendEntries RPC
+		finish = true
 		rf.mu.Unlock()
-		//  try appendEntries rpc
 		if !rf.sendAppendEntries(server, &args, &reply) {
 			return
 		}
 		rf.mu.Lock()
-		// RPC STATE 1: found a larger term
+		// 4: RPC-Result: found a larger peer's term
 		// current peer convert to follower and update term equal to candidate's term
 		if reply.Term > rf.CurrentTerm {
 			rf.Role = FOLLOWER
@@ -999,10 +1001,16 @@ func (rf *Raft) sendEntries(server int, newEntriesFlag bool) {
 			rf.mu.Unlock()
 			return
 		}
-		// RPC STATE 2: log inconsistency
-		// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
+		// 5: RPC-Result: Log Conflict
+		// If AppendEntries fails because of log confilct: decrement nextIndex and retry
+		// Case 1: leader doesn't have XTerm:
+		//				 nextIndex = XIndex
+		// Case 2: leader has XTerm:
+		// 				nextIndex = leader's last entry for XTerm
+		// Case 3: follower's log is too short:
+		//				nextIndex = XLen
 		if !reply.Success {
-			// case 1: follower's log is too short
+			// Case 3
 			if reply.XLen < prevLogIndex {
 				rf.NextIndex[server] = Max(reply.XLen, 1) // prevent nextIndex < 0
 			} else {
@@ -1011,28 +1019,28 @@ func (rf *Raft) sendEntries(server int, newEntriesFlag bool) {
 				for newNextIndex > rf.LastIncludedIndex && rf.GetLogEntry(newNextIndex).Term > reply.XTerm {
 					newNextIndex--
 				}
-				//  case 2: leader has xTerm
+				// Case 2
 				if rf.GetLogEntry(newNextIndex).Term == reply.XTerm {
 					// 防止回退到snapshot之前的日志
 					rf.NextIndex[server] = Max(newNextIndex, rf.LastIncludedIndex+1)
 				} else {
-					// case 3: leader don't have xTerm
+					// Case 1
 					// help leader can quick find follower expected log
 					rf.NextIndex[server] = reply.XIndex
 				}
 			}
 			rf.DPrintf(false, "rf-[%d] send entires, rf.NextIndex[%d] update to %d", rf.me, server, rf.NextIndex[server])
-			// Heartbeat don't need to wait for reply.success, break directly
 			finish = false // rpc failed, retry
-			if !newEntriesFlag {
+			// 6. Heartbeat don't need to wait for reply.success, return directly
+			if !newEntries {
 				rf.mu.Unlock()
 				return
 			}
 		} else {
-			// RPC STATE 3: appendEntries success
+			// 7: RPC-Result: AppendEntries Success
 			// 发送方连续发送不同长度日志的AppendEntries，且短日志更晚到达，
 			// 利用Max使得NextIndex及MatchIndex单调增长，同时忽略短日志
-			if !newEntriesFlag {
+			if !newEntries {
 				rf.mu.Unlock()
 				return
 			}
