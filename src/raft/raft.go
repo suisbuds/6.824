@@ -75,10 +75,6 @@ type Raft struct {
 	applyCh chan ApplyMsg // 用于发送提交日志的channel
 	cond    *sync.Cond    // 唤醒线程
 
-	// Lab3：Client 发送的 operation 要在三分之一心跳间隔内提交
-	// 为了快速提交日志，leader需要在 Start() 时立即向follower发送日志，并在发送后即刻更新 CommitIndex，从而加速CommitIndex的更新
-	quickCommitCheck int32
-
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -91,12 +87,16 @@ type Raft struct {
 	Log             []LogEntry
 	NextIndex       []int // leader 即将发送到对应 follower 的日志
 	MatchIndex      []int // leader 已经发送给对应 follower 的日志，即 follower 当前拥有的所有日志
-	Snapshot 	  []byte
 
 	CommitIndex       int // 需要提交的日志
 	LastApplied       int // 已提交并应用的日志
 	LastIncludedIndex int // 快照压缩替换掉的之前的索引
 	LastIncludedTerm  int // 快照压缩替换掉的索引的term
+
+	snapshot []byte
+	// Lab3：Client 发送的 operation 要在三分之一心跳间隔内提交
+	// 为了快速提交日志，leader需要在 Start() 时立即向follower发送日志，并在发送后即刻更新 CommitIndex，从而加速CommitIndex的更新
+	quickCommitCheck int32
 }
 
 // return currentTerm and whether this server believes it is the leader.
@@ -138,13 +138,14 @@ func (rf *Raft) persist() {
 	e.Encode(rf.LastIncludedIndex)
 	e.Encode(rf.LastIncludedTerm)
 	raftstate := w.Bytes()
+	//NOTE: 不会检查snapshot大小
 	rf.persister.SaveRaftState(raftstate)
 	rf.DPrintf(false, "rf-[%d] call persist(), CurrentTerm = %d, VotedFor = %d, LogLength = %d, LastIncludedIndex = %d, LastIncludedTerm = %d", rf.me, rf.CurrentTerm, rf.VotedFor, len(rf.Log), rf.LastIncludedIndex, rf.LastIncludedTerm)
 }
 
 // restore previously persisted state.
-func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+func (rf *Raft) readPersist(raftstate []byte) {
+	if raftstate == nil || len(raftstate) < 1 { // bootstrap without any state?
 		return
 	}
 	// Your code here (2C).
@@ -161,16 +162,16 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.yyy = yyy
 	// }
 
-	// Need to add lock, because it's called by other functions without lock
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	r := bytes.NewBuffer(data)
+	// Not Need to add lock, because it's called by other functions with lock
+
+	r := bytes.NewBuffer(raftstate)
 	d := labgob.NewDecoder(r)
 	var currentTerm int
 	var votedFor int
 	var log []LogEntry
 	var lastIncludedIndex int
 	var lastIncludedTerm int
+
 	var validateDefaultVaule func() bool
 	validateDefaultVaule = func() bool {
 		if d.Decode(&currentTerm) != nil ||
@@ -182,6 +183,7 @@ func (rf *Raft) readPersist(data []byte) {
 		}
 		return true
 	}
+
 	if !validateDefaultVaule() {
 		// panic("ReadPersist(): Decode Error because of indefault value")
 		return
@@ -191,11 +193,11 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.Log = log
 		rf.LastIncludedIndex = lastIncludedIndex
 		rf.LastIncludedTerm = lastIncludedTerm
-		rf.DPrintf(false, "rf-[%d] call readPersist(), CurrentTerm = %d, VotedFor = %d, LogLength = %d, LastIncludedIndex = %d, LastIncludedTerm = %d", rf.me, rf.CurrentTerm, rf.VotedFor, len(rf.Log), lastIncludedIndex, lastIncludedTerm)
 	}
+	rf.DPrintf(false, "rf-[%d] call readPersist(), CurrentTerm = %d, VotedFor = %d, LogLength = %d, LastIncludedIndex = %d, LastIncludedTerm = %d", rf.me, rf.CurrentTerm, rf.VotedFor, len(rf.Log), lastIncludedIndex, lastIncludedTerm)
 }
 
-func(rf *Raft) persistSnapshot(snapshot []byte){
+func (rf *Raft) persistSnapshot(snapshot []byte) {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.CurrentTerm)
@@ -213,25 +215,10 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 	// Your code here (2D).
 	// Not need to implement
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
-	// defer rf.persist()
+
 	if lastIncludedIndex <= rf.CommitIndex {
 		return false
 	}
-	// log := make([]LogEntry, 0)
-	// log = append(log, LogEntry{
-	// 	Command: -1,
-	// 	Term:    lastIncludedTerm,
-	// 	Index:   lastIncludedIndex,
-	// })
-	// if lastIncludedIndex <= rf.GetLastLogEntry().Index && lastIncludedTerm == rf.GetLogEntry(lastIncludedIndex).Term {
-	// 	rf.Log = append(log, rf.Log[rf.GetLogEntry(lastIncludedIndex).Index+1:]...)
-	// } else {
-	// 	rf.Log = log
-	// }
-	// rf.LastApplied = lastIncludedIndex
-	// rf.CommitIndex = lastIncludedIndex
 	return true
 }
 
@@ -328,10 +315,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	rf.DPrintf(false, "rf-[%d] Get RequestVote from rf-[%d]", rf.me, args.CandidateId)
 	reply.Term = rf.CurrentTerm
 	lastIndex := rf.GetLastLogEntry().Index
 	lastTerm := rf.GetLastLogEntry().Term
+
+	// Check candidate's log is at least as up-to-date as receiver's log
+	var validateCandidateLog func() bool
+	validateCandidateLog = func() bool {
+		if lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && lastIndex <= args.LastLogIndex) {
+			return true
+		}
+		return false
+	}
+
 	// currentTerm > candidate's term, reject to vote
 	// currentTerm < candidate's term, convert to follower
 	// if rf.currentTerm == args.Term, directly return
@@ -342,26 +340,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.Role = FOLLOWER
 		rf.CurrentTerm = args.Term // candidate's term
 		rf.VotedFor = -1           // 重置选票至过渡状态
-		rf.persist()
-	} else {
-		return
-	}
-	// Check candidate's log is at least as up-to-date as receiver's log
-	var validateCandidateLog func() bool
-	validateCandidateLog = func() bool {
-		if lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && lastIndex <= args.LastLogIndex) {
-			return true
+		if validateCandidateLog() {
+			reply.VoteGranted = true
+			rf.VotedFor = args.CandidateId
 		}
-		return false
-	}
-	// 检查选票是否在过渡状态
-	if rf.VotedFor == -1 && validateCandidateLog() {
-		reply.VoteGranted = true
-		rf.VotedFor = args.CandidateId
 		// 投票成功，重置选举超时，防止不符合的candidate阻塞潜在leader
 		rf.persist()
 		rf.ElectionTimeout = GetElectionTimeout()
 		rf.DPrintf(false, "rf-[%d] Role = %d, VoteFor = %d, Term = %d", rf.me, rf.Role, args.CandidateId, rf.CurrentTerm)
+	} else {
+		return
 	}
 }
 
@@ -377,28 +365,28 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	// State 1: reset election timeout, prevent from election while having leader
+	// 1: reset election timeout, prevent from election while having leader
 	rf.DPrintf(false, "rf-[%d], Role = %d, Get AppendEntries from leader-[%d], LastIncludeIndex = %d, CurrentTerm = %d, PrevLogIndex = %d, PrevLogTerm = %d, LeaderTerm = %d",
 		rf.me, rf.Role, args.LeaderId, rf.LastIncludedIndex, rf.CurrentTerm, args.PrevLogIndex, args.PrevLogTerm, args.Term)
 
 	reply.Term = rf.CurrentTerm
 	rf.ElectionTimeout = GetElectionTimeout()
-	// State 2: 发送方的term小于接收方的term / 发送方prevLogIndex处的日志条目已经被接收方压缩删除
+	// 2: 发送方的term小于接收方的term / 发送方prevLogIndex处的日志条目已经被接收方压缩删除
 	// 如果是后者，XLen=0，sendEntries中NextIndex将被设定为Max(0,1)即1，并在下次TrySendEntries中发送快照
 	if args.Term < rf.CurrentTerm || rf.LastIncludedIndex > args.PrevLogIndex {
 		reply.Success = false
 		return
 	}
-	// State 3: reply find potential leader, update term and convert to follower
+	// 3: reply find potential leader, update term and convert to follower
 	if rf.CurrentTerm < args.Term || rf.Role == CANDIDATE {
 		reply.Success = true
 		rf.Role = FOLLOWER
 		rf.CurrentTerm = args.Term
 		rf.VotedFor = -1 // reset vote, dont vote anymore
-		rf.persist()
+		// rf.persist()
 		rf.cond.Broadcast() // 唤醒election thread
 	}
-	// State 4: replier log inconsistency, fill in XTerm, XIndex, XLen and retry
+	// 4: replier log inconsistency, fill in XTerm, XIndex, XLen and retry
 	if rf.GetLastLogEntry().Index < args.PrevLogIndex || rf.GetLogEntry(args.PrevLogIndex).Term != args.PrevLogTerm {
 		reply.Success = false
 		reply.XLen = rf.GetLastLogEntry().Index
@@ -420,7 +408,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 2. 不重合时，将本地日志置为发送方日志
 	// 3. 特殊情况：发送方连续发送不同长度的日志，且短日志更晚到达，此时不能将本地日志置为发送方日志，会使本地日志回退（日志只能递增）
 
-	reply.Success = true
 	for index, entry := range args.Entries {
 		// 日志不重合
 		if rf.GetLastLogEntry().Index < entry.Index || rf.GetLogEntry(entry.Index).Term != entry.Term {
@@ -430,7 +417,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 			log = append(log, args.Entries[index:]...)
 			rf.Log = log
-			rf.persist()
 			rf.DPrintf(false, "rf-[%d], Role = %d, Append new log = %v", rf.me, rf.Role, rf.Log)
 		}
 	}
@@ -439,6 +425,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.CommitIndex = Min(args.LeaderCommitIndex, rf.GetLastLogEntry().Index)
 		rf.DPrintf(false, "rf-[%d] Role = %d, CommitIndex update to %d", rf.me, rf.Role, rf.CommitIndex)
 	}
+	rf.persist()
+	reply.Success = true
 }
 
 /*
@@ -472,55 +460,40 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.Role = FOLLOWER
 		rf.CurrentTerm = args.Term
 		rf.VotedFor = -1
-		rf.persist()
 		rf.cond.Broadcast()
 	}
 	// 2. saveStateAndSnapshot to persister
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	e.Encode(rf.CurrentTerm)
-	e.Encode(rf.VotedFor)
-	e.Encode(rf.Log)
-	e.Encode(rf.LastIncludedIndex)
-	e.Encode(rf.LastIncludedTerm)
-	raftstate := w.Bytes()
-	rf.persister.SaveStateAndSnapshot(raftstate, args.Snapshot)
-	// rf.DPrintf(true,"InstallSnapshot() raftstate size = %d", rf.RaftStateSize())
+	rf.persistSnapshot(args.Snapshot)
 
 	rf.LastIncludedIndex = args.LastIncludedIndex
 	rf.LastIncludedTerm = args.LastIncludedTerm
 	lastLogEntry := rf.GetLastLogEntry()
+	entry := rf.GetLogEntry(args.LastIncludedIndex)
 
 	// 3. If  agrs.LastIncludedIndex < local LastIncludedIndex, delete log entries whose index <= args.LastIncludedIndex
 	// And use ApplyMsg to send snapshot to applyCh in order to apply snapshot in state machine
-	if args.LastIncludedIndex < lastLogEntry.Index {
-		entry := rf.GetLogEntry(args.LastIncludedIndex)
-		if entry.Term == args.LastIncludedTerm {
-			var log []LogEntry
-			// NOTE:check the boundary 😄
-			for i := entry.Index + 1; i <= lastLogEntry.Index; i++ {
-				log = append(log, rf.GetLogEntry(i))
-			}
-			rf.Log = log
-			rf.persist()
-			rf.DPrintf(false, "rf-[%d] InstallSnapShot success, LastIncludeIndex = %d, condition: delete logs whose index <= args.LastIncludedIndex", rf.me, rf.LastIncludedIndex)
-			rf.mu.Unlock()
-			// Can't use channel with lock,
-			rf.applyCh <- ApplyMsg{
-				SnapshotValid: true,
-				Snapshot:      args.Snapshot,
-				SnapshotIndex: args.LastIncludedIndex,
-				SnapshotTerm:  args.LastIncludedTerm,
-			}
-			rf.DPrintf(false, "rf-[%d] apply snapshot", rf.me)
-			return
+	if args.LastIncludedIndex < lastLogEntry.Index && args.LastIncludedTerm == entry.Term {
+		var log []LogEntry
+		// NOTE:check the boundary 😄
+		for i := entry.Index + 1; i <= lastLogEntry.Index; i++ {
+			log = append(log, rf.GetLogEntry(i))
 		}
+		rf.Log = log
+		rf.persist()
+		rf.mu.Unlock()
+		// Can't use channel with lock,
+		rf.applyCh <- ApplyMsg{
+			SnapshotValid: true,
+			Snapshot:      args.Snapshot,
+			SnapshotIndex: args.LastIncludedIndex,
+			SnapshotTerm:  args.LastIncludedTerm,
+		}
+		return
 	}
 	// 4. If  args.LastIncludedIndex >= local LastIncludedIndex, discard all the local logs
 	// And use ApplyMsg to send snapshot to applyCh
 	rf.Log = make([]LogEntry, 0)
 	rf.persist()
-	rf.DPrintf(false, "rf-[%d] InstallSnapShot Success, LastIncludeIndex = %d, condition: discard all the local logs", rf.me, rf.LastIncludedIndex)
 	rf.mu.Unlock()
 	rf.applyCh <- ApplyMsg{
 		SnapshotValid: true,
@@ -528,7 +501,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		SnapshotIndex: args.LastIncludedIndex,
 		SnapshotTerm:  args.LastIncludedTerm,
 	}
-	rf.DPrintf(false, "rf-[%d] apply snapshot", rf.me)
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -591,20 +563,19 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	_, isLeader := rf.GetState()
 	if !isLeader || rf.killed() {
-		rf.DPrintf(false, "rf-[%d] Start() Fail, isLeader = %t, isKilled = %t", rf.me, isLeader, rf.killed())
 		return -1, -1, false
 	}
 	// leader创建日志条目并通过心跳通知所有follower写入日志
 	rf.mu.Lock()
+	index := rf.GetLastLogEntry().Index + 1
 	logEntry := LogEntry{
 		Command: command,
 		Term:    rf.CurrentTerm,
-		Index:   rf.GetLastLogEntry().Index + 1,
+		Index:   index,
 	}
 	rf.Log = append(rf.Log, logEntry)
 	rf.persist()
 	rf.mu.Unlock()
-	rf.DPrintf(false, "rf-[%d] Start(), Index = %d, Term = %d, Command = %d", rf.me, logEntry.Index, logEntry.Term, logEntry.Command)
 
 	// Lab3: leader一开始要快速提交Client发送的Operation，以便通过速度测试
 	atomic.StoreInt32(&rf.quickCommitCheck, 20)
@@ -696,10 +667,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.MatchIndex = make([]int, len(peers))
 	rf.NextIndex = make([]int, len(peers))
 
-	rf.mu.Unlock()
-
-	// initialize from state persisted after  crash
+	// initialize from state persisted after crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.mu.Unlock()
 
 	// keep running ticker goroutine for  elections
 	go rf.ticker()
@@ -765,17 +735,19 @@ func (rf *Raft) doFollowerTask() bool {
 func (rf *Raft) doCandidateTask() {
 	// prepare for election
 	rf.mu.Lock()
+	rf.ElectionTimeout = GetElectionTimeout() // 重置选举超时
+
 	votesGet := 1 // 得票数
 	rf.CurrentTerm++
 	rf.VotedFor = rf.me // 投票给自己
 	rf.persist()
-	rf.ElectionTimeout = GetElectionTimeout() // 重置选举超时
+	
 	term := rf.CurrentTerm
 	electionTimeout := rf.ElectionTimeout
 	lastLogIndex := rf.GetLastLogEntry().Index
 	lastLogTerm := rf.GetLastLogEntry().Term
 	rf.mu.Unlock()
-	rf.DPrintf(false, "rf-[%d] start election, term = %d", rf.me, term)
+
 	// State1：无锁并发RequestVote RPC
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
@@ -801,15 +773,16 @@ func (rf *Raft) doCandidateTask() {
 				}
 				// 立刻转换为follower
 				if reply.Term > rf.CurrentTerm {
-					rf.CurrentTerm = reply.Term
-					rf.persist()
 					rf.Role = FOLLOWER
 					rf.ElectionTimeout = GetElectionTimeout()
+					rf.CurrentTerm = reply.Term
+					rf.persist()
 				}
 				rf.cond.Broadcast()
 			}(i)
 		}
 	}
+
 	// State2：在主线程中运行超时goroutine，检测candidate是否运行超时，将timeout原子置1记录，并唤醒主线程提醒超时
 	var timeout int32
 	go func(electionTimeout int, timeout *int32) {
