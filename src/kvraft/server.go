@@ -206,16 +206,14 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// keep running goroutine for receiving Msg and trying Snapshot
 	go kv.receiveMsg()
-	go kv.trySnapshot()
+	// go kv.trySnapshot()
 	return kv
 }
 
 // receive commited logs from kv.applyCh
 func (kv *KVServer) receiveMsg() {
-	for msg := range kv.applyCh {
-		if kv.killed() {
-			return
-		}
+	for !kv.killed() {
+		msg := <-kv.applyCh
 		DPrintf(false, "server-[%d], msg receive = %v, raftStateSize = %d", kv.me, msg, kv.rf.RaftStateSize())
 		if msg.CommandValid {
 			// log Command
@@ -224,6 +222,9 @@ func (kv *KVServer) receiveMsg() {
 			kv.applyIndex = msg.CommandIndex
 			kv.doOperation(op)
 			kv.mu.Unlock()
+			if kv.maxraftstate > 0 {
+				kv.snapshot()
+			}
 		} else if msg.SnapshotValid {
 			// Snapshot command
 
@@ -240,16 +241,23 @@ func (kv *KVServer) receiveMsg() {
 				kv.applyIndex = msg.SnapshotIndex
 				kv.mu.Unlock()
 			}
+			if kv.maxraftstate > 0 {
+				kv.snapshot()
+			}
 		}
 	}
 }
 
 // check raft's logs current size periodically, and compact logs if hit the threshold
+// UGLY: 平衡trySnapshot的频率，必须让goroutine休眠，否则会一直占用资源
 func (kv *KVServer) trySnapshot() {
 
 	for !kv.killed() {
 		// 如果raft日志长度大于阀值，利用snapshot压缩日志
-		if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate {
+		// if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate {
+		// 	kv.snapshot()
+		// }
+		if kv.maxraftstate > 0 {
 			kv.snapshot()
 		}
 		time.Sleep(time.Millisecond)

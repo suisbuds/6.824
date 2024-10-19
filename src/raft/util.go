@@ -7,7 +7,7 @@ import (
 )
 
 // Debugging
-const Debug = true
+const Debug = false
 
 func (rf *Raft) DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
 	if Debug {

@@ -42,8 +42,9 @@ const (
 	CANDIDATE              = 2
 	FOLLOWER               = 3
 	BROADCAST_TIME         = 100 // 限制为每秒十次心跳
-	ELECTION_TIMEOUT_BASE  = 300 // broadcastTime < electionTimeout ≪ MTBF
+	ELECTION_TIMEOUT_BASE  = 200 // broadcastTime < electionTimeout ≪ MTBF
 	ELECTION_TIMEOUT_RANGE = 200
+	MAXRAFTSTATE           = 1000
 )
 
 type ApplyMsg struct {
@@ -140,6 +141,7 @@ func (rf *Raft) persist() {
 	e.Encode(rf.LastIncludedTerm)
 	raftstate := w.Bytes()
 	rf.persister.SaveRaftState(raftstate)
+	rf.DPrintf(false, "persist() raftstate size = %d", rf.RaftStateSize())
 	rf.DPrintf(false, "rf-[%d] call persist(), CurrentTerm = %d, VotedFor = %d, LogLength = %d, LastIncludedIndex = %d, LastIncludedTerm = %d", rf.me, rf.CurrentTerm, rf.VotedFor, len(rf.Log), rf.LastIncludedIndex, rf.LastIncludedTerm)
 }
 
@@ -184,7 +186,8 @@ func (rf *Raft) readPersist(data []byte) {
 		return true
 	}
 	if !validateDefaultVaule() {
-		panic("ReadPersist(): Decode Error because of indefault value")
+		// panic("ReadPersist(): Decode Error because of indefault value")
+		return
 	} else {
 		rf.CurrentTerm = currentTerm
 		rf.VotedFor = votedFor
@@ -209,7 +212,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
-// HACK: 压缩问题会是在Snapshot吗？貌似与index有关
+// HACK: 问题是日志压缩不够，而且很明显rf.Log = log添加很多多余的日志
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	// delete log entries whose index <= arg's index
@@ -231,7 +234,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.LastIncludedIndex = index                     // update lastIncludedIndex
 	rf.Log = log
 
-	// 3. state change, persist log
+	// 3. persist current state and snapshot, raftstate is lab2, snapshot is lab3
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.CurrentTerm)
@@ -240,8 +243,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	e.Encode(rf.LastIncludedIndex)
 	e.Encode(rf.LastIncludedTerm)
 	raftstate := w.Bytes()
-	// persist current state and snapshot
 	rf.persister.SaveStateAndSnapshot(raftstate, snapshot)
+	rf.DPrintf(false, "snapshot() raftstate size = %d", rf.RaftStateSize())
 	rf.mu.Unlock()
 }
 
@@ -320,10 +323,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 		return
 	} else if rf.CurrentTerm < args.Term {
+		rf.Role = FOLLOWER
 		rf.CurrentTerm = args.Term // candidate's term
 		rf.VotedFor = -1           // 重置选票至过渡状态
 		rf.persist()
-		rf.Role = FOLLOWER
 	} else {
 		return
 	}
@@ -466,6 +469,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	e.Encode(rf.LastIncludedTerm)
 	raftstate := w.Bytes()
 	rf.persister.SaveStateAndSnapshot(raftstate, args.Snapshot)
+	// rf.DPrintf(true,"InstallSnapshot() raftstate size = %d", rf.RaftStateSize())
 
 	rf.LastIncludedIndex = args.LastIncludedIndex
 	rf.LastIncludedTerm = args.LastIncludedTerm
@@ -587,7 +591,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.DPrintf(false, "rf-[%d] Start(), Index = %d, Term = %d, Command = %d", rf.me, logEntry.Index, logEntry.Term, logEntry.Command)
 
 	// Lab3: leader一开始要快速提交Client发送的Operation，以便通过速度测试
-	atomic.StoreInt32(&rf.quickCommitCheck, 20)
+	atomic.StoreInt32(&rf.quickCommitCheck, 5)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
 			go rf.sendEntries(i, true)
@@ -818,7 +822,7 @@ func (rf *Raft) doCandidateTask() {
 		}
 		if !validateElectionState() {
 			rf.mu.Unlock()
-			break
+			return
 		}
 		if votesGet > len(rf.peers)/2 {
 			rf.DPrintf(false, "rf-[%d] is voted as Leader, term = [%d]", rf.me, rf.CurrentTerm)
@@ -904,7 +908,6 @@ func (rf *Raft) trySendEntries(firstSendEntries bool) {
 		nextIndex := rf.NextIndex[i]
 		firstLogIndex := rf.GetFirstLogEntry().Index
 		lastLogIndex := rf.GetLastLogEntry().Index
-		rf.mu.Unlock()
 		if i != rf.me {
 			// lastLogIndex >= nextIndex，说明leader可能有新日志需要复制 || 成为leader后首次调用
 			if lastLogIndex >= nextIndex || firstSendEntries {
@@ -919,6 +922,13 @@ func (rf *Raft) trySendEntries(firstSendEntries bool) {
 				// SendHeartbeat
 				go rf.sendEntries(i, false)
 			}
+			// if firstLogIndex >= nextIndex {
+			// 	rf.mu.Unlock()
+			// 	go rf.sendSnapshot(i)
+			// }else{
+			// 	rf.mu.Unlock()
+			// 	go rf.sendEntries(i, true)
+			// }
 		}
 	}
 }
