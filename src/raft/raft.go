@@ -44,7 +44,6 @@ const (
 	BROADCAST_TIME         = 100 // 限制为每秒十次心跳
 	ELECTION_TIMEOUT_BASE  = 200 // broadcastTime < electionTimeout ≪ MTBF
 	ELECTION_TIMEOUT_RANGE = 200
-	MAXRAFTSTATE           = 1000
 )
 
 type ApplyMsg struct {
@@ -591,10 +590,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.DPrintf(false, "rf-[%d] Start(), Index = %d, Term = %d, Command = %d", rf.me, logEntry.Index, logEntry.Term, logEntry.Command)
 
 	// Lab3: leader一开始要快速提交Client发送的Operation，以便通过速度测试
-	atomic.StoreInt32(&rf.quickCommitCheck, 5)
+	atomic.StoreInt32(&rf.quickCommitCheck, 20)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
-			go rf.sendEntries(i, true)
+			go rf.sendEntries(i)
 		}
 	}
 	return logEntry.Index, logEntry.Term, isLeader
@@ -707,7 +706,7 @@ func (rf *Raft) doLeaderTask() {
 		atomic.AddInt32(&rf.quickCommitCheck, -1)
 	} else {
 		// Lab2
-		rf.trySendEntries(false) // false代表是否为leader第一次发送日志
+		rf.trySendEntries() // false代表是否为leader第一次发送日志
 		rf.updateCommitIndex()
 		time.Sleep(time.Duration(rf.BroadcastTime) * time.Millisecond) // 强制睡眠，实现心跳间隔
 	}
@@ -834,7 +833,7 @@ func (rf *Raft) doCandidateTask() {
 				rf.NextIndex[i] = rf.GetLastLogEntry().Index + 1 // pessimistical initialization
 			}
 			rf.mu.Unlock()
-			rf.trySendEntries(true) // first time to send log entries
+			rf.trySendEntries() // first time to send log entries
 			break
 		}
 		rf.mu.Unlock()
@@ -902,33 +901,33 @@ func (rf *Raft) updateLastApplied() {
 
 // 尝试执行心跳rpc / 日志复制 / 快照复制
 // firstSendEntries: 成为leader后初次调用
-func (rf *Raft) trySendEntries(firstSendEntries bool) {
+func (rf *Raft) trySendEntries() {
 	for i := 0; i < len(rf.peers); i++ {
+		// NOTE: 小心死锁
 		rf.mu.Lock()
 		nextIndex := rf.NextIndex[i]
 		firstLogIndex := rf.GetFirstLogEntry().Index
-		lastLogIndex := rf.GetLastLogEntry().Index
+		// lastLogIndex := rf.GetLastLogEntry().Index
+		rf.mu.Unlock()
 		if i != rf.me {
-			// lastLogIndex >= nextIndex，说明leader可能有新日志需要复制 || 成为leader后首次调用
-			if lastLogIndex >= nextIndex || firstSendEntries {
-				// SendEntries更新目标节点日志
-				if firstLogIndex <= nextIndex {
-					go rf.sendEntries(i, true)
-				} else {
-					// SendSnapshot更新落后的目标节点
-					go rf.sendSnapshot(i)
-				}
-			} else {
-				// SendHeartbeat
-				go rf.sendEntries(i, false)
-			}
-			// if firstLogIndex >= nextIndex {
-			// 	rf.mu.Unlock()
-			// 	go rf.sendSnapshot(i)
-			// }else{
-			// 	rf.mu.Unlock()
-			// 	go rf.sendEntries(i, true)
+			// // lastLogIndex >= nextIndex，说明leader可能有新日志需要复制 || 成为leader后首次调用
+			// if lastLogIndex >= nextIndex || firstSendEntries {
+			// 	// SendEntries更新目标节点日志
+			// 	if firstLogIndex <= nextIndex {
+			// 		go rf.sendEntries(i, true)
+			// 	} else {
+			// 		// SendSnapshot更新落后的目标节点
+			// 		go rf.sendSnapshot(i)
+			// 	}
+			// } else {
+			// 	// SendHeartbeat
+			// 	go rf.sendEntries(i, false)
 			// }
+			if firstLogIndex > nextIndex {
+				go rf.sendSnapshot(i)
+			} else {
+				go rf.sendEntries(i)
+			}
 		}
 	}
 }
@@ -946,7 +945,7 @@ func (rf *Raft) trySendEntries(firstSendEntries bool) {
 * In fact, it is a special case of sendEntries, so we can use sendEntries to implement heartbeat
 * newEntriesFlag: true means sendEntries, false means heartbeat
  */
-func (rf *Raft) sendEntries(server int, newEntries bool) {
+func (rf *Raft) sendEntries(server int) {
 	// NOTE: 想象滑动窗口
 	finish := false
 	// sendEntries loop or send one heartbeat
@@ -966,35 +965,44 @@ func (rf *Raft) sendEntries(server int, newEntries bool) {
 		leaderCommit := rf.CommitIndex
 		prevLogIndex := rf.NextIndex[server] - 1
 		prevLogTerm := rf.GetLogEntry(prevLogIndex).Term
-		entries := rf.Log[prevLogIndex-rf.LastIncludedIndex:]
-		var args AppendEntriesArgs
-		var reply AppendEntriesReply
-		if newEntries {
-			// SendEntries
-			args = AppendEntriesArgs{
-				Term:              currentTerm,
-				LeaderId:          rf.me,
-				PrevLogIndex:      prevLogIndex,
-				PrevLogTerm:       prevLogTerm,
-				Entries:           entries,
-				LeaderCommitIndex: leaderCommit}
-			reply = AppendEntriesReply{}
-			rf.DPrintf(false, "rf-[%d] send entries to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]",
-				rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
-		} else {
-			// SendHeartbeat
-			args = AppendEntriesArgs{
-				Term:              currentTerm,
-				LeaderId:          rf.me,
-				PrevLogIndex:      prevLogIndex,
-				PrevLogTerm:       prevLogTerm,
-				LeaderCommitIndex: leaderCommit}
-			reply = AppendEntriesReply{}
-			rf.DPrintf(false, "rf-[%d] send heartBeat to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]",
-				rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
+		startLogIndex := prevLogIndex - rf.LastIncludedIndex
+		// entries := rf.Log[prevLogIndex-rf.LastIncludedIndex:] // 创建引用，原切片被修改时也会被一同修改
+		entries := make([]LogEntry, len(rf.Log[startLogIndex:]))
+		copy(entries, rf.Log[startLogIndex:]) // 复制数组
+		args := AppendEntriesArgs{
+			Term:              currentTerm,
+			LeaderId:          rf.me,
+			PrevLogIndex:      prevLogIndex,
+			PrevLogTerm:       prevLogTerm,
+			Entries:           entries,
+			LeaderCommitIndex: leaderCommit,
 		}
+		reply := AppendEntriesReply{}
+		// if newEntries {
+		// 	// SendEntries
+		// 	args = AppendEntriesArgs{
+		// 		Term:              currentTerm,
+		// 		LeaderId:          rf.me,
+		// 		PrevLogIndex:      prevLogIndex,
+		// 		PrevLogTerm:       prevLogTerm,
+		// 		Entries:           entries,
+		// 		LeaderCommitIndex: leaderCommit}
+		// 	reply = AppendEntriesReply{}
+		// 	rf.DPrintf(false, "rf-[%d] send entries to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]",
+		// 		rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
+		// } else {
+		// 	// SendHeartbeat
+		// 	args = AppendEntriesArgs{
+		// 		Term:              currentTerm,
+		// 		LeaderId:          rf.me,
+		// 		PrevLogIndex:      prevLogIndex,
+		// 		PrevLogTerm:       prevLogTerm,
+		// 		LeaderCommitIndex: leaderCommit}
+		// 	reply = AppendEntriesReply{}
+		// 	rf.DPrintf(false, "rf-[%d] send heartBeat to server [%d], prevLogIndex = [%d], prevLogTerm = [%d], lastIncludeIndex = [%d]",
+		// 		rf.me, server, prevLogIndex, prevLogTerm, rf.LastIncludedIndex)
+		// }
 		// 3. AppendEntries RPC
-		finish = true
 		rf.mu.Unlock()
 		if !rf.sendAppendEntries(server, &args, &reply) {
 			return
@@ -1008,6 +1016,10 @@ func (rf *Raft) sendEntries(server int, newEntries bool) {
 			rf.VotedFor = -1 // reset vote
 			rf.persist()
 			rf.ElectionTimeout = GetElectionTimeout()
+			// rf.mu.Unlock()
+			// return
+		}
+		if rf.Role != LEADER || reply.Term != rf.CurrentTerm {
 			rf.mu.Unlock()
 			return
 		}
@@ -1039,21 +1051,23 @@ func (rf *Raft) sendEntries(server int, newEntries bool) {
 					rf.NextIndex[server] = reply.XIndex
 				}
 			}
+			// rpc failed, retry
 			rf.DPrintf(false, "rf-[%d] send entires, rf.NextIndex[%d] update to %d", rf.me, server, rf.NextIndex[server])
-			finish = false // rpc failed, retry
+			// finish = false
 			// 6. Heartbeat don't need to wait for reply.success, return directly
-			if !newEntries {
-				rf.mu.Unlock()
-				return
-			}
+			// if !newEntries {
+			// 	rf.mu.Unlock()
+			// 	return
+			// }
 		} else {
 			// 7: RPC-Result: AppendEntries Success
 			// 发送方连续发送不同长度日志的AppendEntries，且短日志更晚到达，
 			// 利用Max使得NextIndex及MatchIndex单调增长，同时忽略短日志
-			if !newEntries {
-				rf.mu.Unlock()
-				return
-			}
+			// if !newEntries {
+			// 	rf.mu.Unlock()
+			// 	return
+			// }
+			finish = true
 			rf.NextIndex[server] = Max(rf.NextIndex[server], prevLogIndex+len(entries)+1)
 			rf.MatchIndex[server] = Max(rf.MatchIndex[server], prevLogIndex+len(entries))
 			rf.DPrintf(false, "rf-[%d] AppendEntries success, NextIndex = %v, MatchIndex = %v", rf.me, rf.NextIndex, rf.MatchIndex)

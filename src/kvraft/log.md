@@ -2,7 +2,7 @@
 ~~1. 并发问题~~   
 ~~2. 活锁？~~
 ~~3. 并发问题~~
-4. raftstate压缩功能性能不佳
+raft性能不佳
     - persist()
     - Snapshot()
     - InstallSnapshot()
