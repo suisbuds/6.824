@@ -7,7 +7,7 @@ import (
 )
 
 // Debugging
-const Debug = false
+const Debug = true
 
 func (rf *Raft) DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -36,10 +36,6 @@ func (rf *Raft) DPrintf(debug bool, format string, a ...interface{}) (n int, err
 func GetElectionTimeout() int {
 	rand.Seed(time.Now().UnixNano())
 	return ELECTION_TIMEOUT_BASE + int(rand.Int31n(ELECTION_TIMEOUT_RANGE))
-}
-
-func (rf *Raft) GetLogEntriesLength() int {
-	return len(rf.Log)
 }
 
 func (rf *Raft) GetLogEntry(index int) LogEntry {

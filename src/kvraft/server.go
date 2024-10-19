@@ -64,7 +64,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	var timeout int32
 	atomic.StoreInt32(&timeout, 0)
 	go func() {
-		time.Sleep(1000 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		atomic.StoreInt32(&timeout, 1)
 	}()
 
@@ -120,7 +120,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	var timeout int32
 	atomic.StoreInt32(&timeout, 0)
 	go func() {
-		time.Sleep(1000 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		atomic.StoreInt32(&timeout, 1)
 	}()
 
@@ -206,7 +206,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// keep running goroutine for receiving Msg and trying Snapshot
 	go kv.receiveMsg()
-	// go kv.trySnapshot()
+	go kv.trySnapshot()
 	return kv
 }
 
@@ -222,7 +222,7 @@ func (kv *KVServer) receiveMsg() {
 			kv.applyIndex = msg.CommandIndex
 			kv.doOperation(op)
 			kv.mu.Unlock()
-			if kv.maxraftstate > 0 {
+			if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*5/10 {
 				kv.snapshot()
 			}
 		} else if msg.SnapshotValid {
@@ -241,7 +241,7 @@ func (kv *KVServer) receiveMsg() {
 				kv.applyIndex = msg.SnapshotIndex
 				kv.mu.Unlock()
 			}
-			if kv.maxraftstate > 0 {
+			if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*5/10 {
 				kv.snapshot()
 			}
 		}

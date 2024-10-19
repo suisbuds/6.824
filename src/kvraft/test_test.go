@@ -709,12 +709,18 @@ func TestSnapshotRecover3B(t *testing.T) {
 
 func TestSnapshotRecoverManyClients3B(t *testing.T) {
 	// Test: restarts, snapshots, many clients (3B) ...
-	// BUG: log were not trimmed in this tes意思是Lab2D写的不好，raftstate里的log太长了
-	// DEBUG: Snapshot太少了，而且InstallSnapshot写得太慢了?
-	// DEBUG: 设置quickCommitCheck时，由于server频繁crash,可能会积压大量log，导致raftstate里的log太长
-	// DEBUG: 问题就是quickCommitCheck
-	// NOTE: maxraftstate indicates the maximum of  servers' raftstate(including the log),  but not including K/V Sever snapshots
-	// NOTE: Client的数量是20个，所以quickCommitCheck设置为20
+	/*
+	BUG: log were not trimmed in this test，意思是Lab2D+Lab3B写的不好，导致raftstate里的log太长了
+	NOTE: maxraftstate indicates the maximum of  servers' raftstate(including the log),  but not including K/V Sever snapshots
+	DEBUG: 
+	1. 首先Snapshot压缩日志太少了，我只有Snapshot一种压缩日志手段，所以我在receiveMsg和trySnapshot里频繁调用snapshot，
+	然后还优化了InstallSnapshot RPC
+	2. 其次为了通过速度测试，我设置了quickCommitCheck=20，由于server数量多、频繁crash重启，导致提交的CommitIndex过多，积压了大量log,又来不及压缩，引发了log were not trimmed
+	关键点：调参，最后通关速度时间为20s左右
+	- quickCommitCheck = 20
+	- sever里snapshot的频率：1ms一次
+	- doleaderTask()快速提交阶段的睡眠时间 = 10ms
+	*/
 	GenericTest(t, "3B", 20, 5, false, true, false, 1000, false)
 }
 

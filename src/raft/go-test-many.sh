@@ -51,29 +51,32 @@ fi
 
 # Default to no test filtering unless otherwise specified
 test=""
+race=""
 if [ $# -gt 2 ]; then
-	test="$3"
+    if [ "$3" = "-race" ]; then
+        race="-race"
+    else
+        test="$3"
+    fi
 fi
 
-label="$test"
-
-# 路径变量
-SCRIPT_DIR=$(dirname "$(realpath "$0")")
-OUTPUT_DIR="$SCRIPT_DIR/../../output"
-
 # Default to no race detection unless otherwise specified
-race=""
 if [ $# -gt 3 ]; then
 	if [ "$4" = "-race" ]; then
 		race="-race"
 	fi
 fi
 
+label="$test"
 prefix=0
-while [ -e "$OUTPUT_DIR/tester-${prefix}-${label}" ]; do
-    ((prefix++))
-done
 
+# 路径变量
+SCRIPT_DIR=$(dirname "$(realpath "$0")")
+OUTPUT_DIR="$SCRIPT_DIR/../../output"
+
+while [ -e "$OUTPUT_DIR/tester-${prefix}-${label}" ]; do
+	((prefix++))
+done
 
 if [ $# -eq 1 ] && [ "$1" = "--help" ]; then
 	echo "Usage: $0 [RUNS=100] [PARALLELISM=#cpus] [TESTPATTERN=''] [RACE=#-race]"
@@ -86,7 +89,6 @@ if ! go test $race -c -o $OUTPUT_DIR/tester-${prefix}-${label}; then
 	echo -e "\e[1;31mERROR: Build failed\e[0m"
 	exit 1
 fi
-
 
 # Figure out where we left off
 logs=$(find $OUTPUT_DIR -maxdepth 1 -name 'test-${prefix}-${label}-*.log' -type f -printf '.' | wc -c)

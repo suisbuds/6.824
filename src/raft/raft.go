@@ -140,7 +140,7 @@ func (rf *Raft) persist() {
 	raftstate := w.Bytes()
 	//NOTE: 不会检查snapshot大小
 	rf.persister.SaveRaftState(raftstate)
-	rf.DPrintf(false, "rf-[%d] call persist(), CurrentTerm = %d, VotedFor = %d, LogLength = %d, LastIncludedIndex = %d, LastIncludedTerm = %d", rf.me, rf.CurrentTerm, rf.VotedFor, len(rf.Log), rf.LastIncludedIndex, rf.LastIncludedTerm)
+	rf.DPrintf(false,"persist() raftstate size = %d", len(raftstate))
 }
 
 // restore previously persisted state.
@@ -207,6 +207,7 @@ func (rf *Raft) persistSnapshot(snapshot []byte) {
 	e.Encode(rf.LastIncludedTerm)
 	raftstate := w.Bytes()
 	rf.persister.SaveStateAndSnapshot(raftstate, snapshot)
+	rf.DPrintf(false,"persistSnapshot() raftstate size = %d", len(raftstate))
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -688,9 +689,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 func (rf *Raft) doLeaderTask() {
 	// Lab3
 	if atomic.LoadInt32(&rf.quickCommitCheck) > 0 {
-		rf.updateCommitIndex()
-		time.Sleep(time.Millisecond) // 快速提交阶段，强制睡眠
 		atomic.AddInt32(&rf.quickCommitCheck, -1)
+		rf.updateCommitIndex()
+		time.Sleep(10 * time.Millisecond) // 快速提交阶段，减少睡眠时间
 	} else {
 		// Lab2
 		rf.trySendEntries()
@@ -741,7 +742,7 @@ func (rf *Raft) doCandidateTask() {
 	rf.CurrentTerm++
 	rf.VotedFor = rf.me // 投票给自己
 	rf.persist()
-	
+
 	term := rf.CurrentTerm
 	electionTimeout := rf.ElectionTimeout
 	lastLogIndex := rf.GetLastLogEntry().Index
@@ -859,7 +860,6 @@ func (rf *Raft) updateCommitIndex() {
 	}
 	// 新的提交日志
 	rf.CommitIndex = newCommitIndex
-	rf.DPrintf(false, "[%d] update CommitIndex, term = %d, NextIndex is %v, MatchIndex is %v, CommitIndex is %d", rf.me, rf.CurrentTerm, rf.NextIndex, rf.MatchIndex, rf.CommitIndex)
 }
 
 /*
