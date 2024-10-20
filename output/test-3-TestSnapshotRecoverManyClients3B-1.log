@@ -1,5 +1,0 @@
-=== RUN   TestSnapshotRecoverManyClients3B
-Test: restarts, snapshots, many clients (3B) ...
-    test_test.go:369: logs were not trimmed (28753 > 8*1000)
---- FAIL: TestSnapshotRecoverManyClients3B (13.20s)
-FAIL

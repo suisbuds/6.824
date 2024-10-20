@@ -995,6 +995,7 @@ func (rf *Raft) sendEntries(server int) {
 					newNextIndex--
 				}
 				// Case 2
+				// BUG:越界问题
 				if rf.GetLogEntry(newNextIndex).Term == reply.XTerm {
 					// 防止回退到snapshot之前的日志
 					rf.NextIndex[server] = Max(newNextIndex, rf.LastIncludedIndex+1)
