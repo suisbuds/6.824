@@ -216,10 +216,11 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 	// Your code here (2D).
 	// Not need to implement
-
-	if lastIncludedIndex <= rf.CommitIndex {
-		return false
-	}
+	// NOTE:修改这里
+	// 忘加锁了
+	// if lastIncludedIndex <= rf.CommitIndex {
+	// 	return false
+	// }
 	return true
 }
 
@@ -579,6 +580,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Unlock()
 
 	// Lab3: leader一开始要快速提交Client发送的Operation，以便通过速度测试
+	// NOTE:修改这里
 	atomic.StoreInt32(&rf.quickCommitCheck, 20)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
@@ -691,7 +693,8 @@ func (rf *Raft) doLeaderTask() {
 	if atomic.LoadInt32(&rf.quickCommitCheck) > 0 {
 		atomic.AddInt32(&rf.quickCommitCheck, -1)
 		rf.updateCommitIndex()
-		time.Sleep(10 * time.Millisecond) // 快速提交阶段，减少睡眠时间
+		// NOTE:修改这里
+		time.Sleep(3*time.Millisecond) // 快速提交阶段，减少睡眠时间
 	} else {
 		// Lab2
 		rf.trySendEntries()

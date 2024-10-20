@@ -1,0 +1,5 @@
+=== RUN   TestSnapshotRecoverManyClients3B
+Test: restarts, snapshots, many clients (3B) ...
+  ... Passed --  19.4  5 192931 25069
+--- PASS: TestSnapshotRecoverManyClients3B (19.42s)
+PASS

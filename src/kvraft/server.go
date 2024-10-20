@@ -222,7 +222,8 @@ func (kv *KVServer) receiveMsg() {
 			kv.applyIndex = msg.CommandIndex
 			kv.doOperation(op)
 			kv.mu.Unlock()
-			if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*5/10 {
+			// NOTE:修改这里
+			if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
 				kv.snapshot()
 			}
 		} else if msg.SnapshotValid {
@@ -241,7 +242,8 @@ func (kv *KVServer) receiveMsg() {
 				kv.applyIndex = msg.SnapshotIndex
 				kv.mu.Unlock()
 			}
-			if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*5/10 {
+			// NOTE:修改这里
+			if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
 				kv.snapshot()
 			}
 		}
@@ -254,10 +256,8 @@ func (kv *KVServer) trySnapshot() {
 
 	for !kv.killed() {
 		// 如果raft日志长度大于阀值，利用snapshot压缩日志
-		// if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate {
-		// 	kv.snapshot()
-		// }
-		if kv.maxraftstate > 0 {
+		// NOTE:修改这里
+		if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
 			kv.snapshot()
 		}
 		time.Sleep(time.Millisecond)

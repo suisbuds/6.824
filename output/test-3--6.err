@@ -1,0 +1,9 @@
+panic: runtime error: index out of range [-24]
+
+goroutine 2174472 [running]:
+6.824/raft.(*Raft).GetLogEntry(...)
+	/home/sulis/Documents/6.824/src/raft/util.go:48
+6.824/raft.(*Raft).sendEntries(0xc003208d00, 0x1)
+	/home/sulis/Documents/6.824/src/raft/raft.go:997 +0x84f
+created by 6.824/raft.(*Raft).trySendEntries in goroutine 2160912
+	/home/sulis/Documents/6.824/src/raft/raft.go:907 +0x16c

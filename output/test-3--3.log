@@ -1,97 +1,97 @@
 === RUN   TestBasic3A
 Test: one client (3A) ...
-  ... Passed --  15.1  5  4614  698
---- PASS: TestBasic3A (15.09s)
+  ... Passed --  15.0  5 16220 2158
+--- PASS: TestBasic3A (15.04s)
 === RUN   TestSpeed3A
 Test: ops complete fast enough (3A) ...
-  ... Passed --  24.1  3  4174    0
---- PASS: TestSpeed3A (24.13s)
+  ... Passed --   7.1  3  8203    0
+--- PASS: TestSpeed3A (7.09s)
 === RUN   TestConcurrent3A
 Test: many clients (3A) ...
-  ... Passed --  15.6  5 10829 1391
---- PASS: TestConcurrent3A (15.55s)
+  ... Passed --  15.2  5 38336 4985
+--- PASS: TestConcurrent3A (15.16s)
 === RUN   TestUnreliable3A
 Test: unreliable net, many clients (3A) ...
-  ... Passed --  16.3  5  6754 1031
---- PASS: TestUnreliable3A (16.31s)
+  ... Passed --  16.1  5 11821 1905
+--- PASS: TestUnreliable3A (16.09s)
 === RUN   TestUnreliableOneKey3A
 Test: concurrent append to same key, unreliable (3A) ...
-  ... Passed --   1.2  3   276   52
---- PASS: TestUnreliableOneKey3A (1.16s)
+  ... Passed --   0.8  3   230   52
+--- PASS: TestUnreliableOneKey3A (0.85s)
 === RUN   TestOnePartition3A
 Test: progress in majority (3A) ...
-  ... Passed --   0.3  5    40    2
+  ... Passed --   0.3  5    45    2
 Test: no progress in minority (3A) ...
-  ... Passed --   1.1  5   136    3
+  ... Passed --   1.1  5   124    3
 Test: completion after heal (3A) ...
-  ... Passed --   1.1  5   111    3
---- PASS: TestOnePartition3A (2.80s)
+  ... Passed --   1.1  5    60    3
+--- PASS: TestOnePartition3A (2.78s)
 === RUN   TestManyPartitionsOneClient3A
 Test: partitions, one client (3A) ...
-  ... Passed --  22.9  5 12576  459
---- PASS: TestManyPartitionsOneClient3A (22.87s)
+  ... Passed --  22.9  5 21491 1536
+--- PASS: TestManyPartitionsOneClient3A (22.88s)
 === RUN   TestManyPartitionsManyClients3A
 Test: partitions, many clients (3A) ...
-  ... Passed --  23.1  5 45865 1375
---- PASS: TestManyPartitionsManyClients3A (23.14s)
+  ... Passed --  22.7  5 180231 5167
+--- PASS: TestManyPartitionsManyClients3A (22.75s)
 === RUN   TestPersistOneClient3A
 Test: restarts, one client (3A) ...
-  ... Passed --  19.1  5  7453  700
---- PASS: TestPersistOneClient3A (19.08s)
+  ... Passed --  19.0  5 39715 2112
+--- PASS: TestPersistOneClient3A (18.96s)
 === RUN   TestPersistConcurrent3A
 Test: restarts, many clients (3A) ...
-  ... Passed --  20.1  5 26660 1328
---- PASS: TestPersistConcurrent3A (20.09s)
+  ... Passed --  19.1  5 96816 5056
+--- PASS: TestPersistConcurrent3A (19.10s)
 === RUN   TestPersistConcurrentUnreliable3A
 Test: unreliable net, restarts, many clients (3A) ...
-  ... Passed --  21.5  5  7495 1018
---- PASS: TestPersistConcurrentUnreliable3A (21.53s)
+  ... Passed --  21.5  5 12937 1884
+--- PASS: TestPersistConcurrentUnreliable3A (21.50s)
 === RUN   TestPersistPartition3A
 Test: restarts, partitions, many clients (3A) ...
-  ... Passed --  26.8  5 60357 1266
---- PASS: TestPersistPartition3A (26.82s)
+  ... Passed --  26.5  5 172704 5499
+--- PASS: TestPersistPartition3A (26.55s)
 === RUN   TestPersistPartitionUnreliable3A
 Test: unreliable net, restarts, partitions, many clients (3A) ...
-  ... Passed --  28.0  5  7226  650
---- PASS: TestPersistPartitionUnreliable3A (27.99s)
+  ... Passed --  28.4  5  9901 1245
+--- PASS: TestPersistPartitionUnreliable3A (28.40s)
 === RUN   TestPersistPartitionUnreliableLinearizable3A
 Test: unreliable net, restarts, partitions, random keys, many clients (3A) ...
-  ... Passed --  34.3  7 22158  987
---- PASS: TestPersistPartitionUnreliableLinearizable3A (34.26s)
+  ... Passed --  30.1  7 35129 2761
+--- PASS: TestPersistPartitionUnreliableLinearizable3A (30.13s)
 === RUN   TestSnapshotRPC3B
 Test: InstallSnapshot RPC (3B) ...
-  ... Passed --   3.4  3  1227   63
---- PASS: TestSnapshotRPC3B (3.41s)
+  ... Passed --   3.7  3  6562   63
+--- PASS: TestSnapshotRPC3B (3.71s)
 === RUN   TestSnapshotSize3B
 Test: snapshot size is reasonable (3B) ...
-  ... Passed --  17.4  3  3433  800
---- PASS: TestSnapshotSize3B (17.42s)
+  ... Passed --   5.9  3  8820  800
+--- PASS: TestSnapshotSize3B (5.86s)
 === RUN   TestSpeed3B
 Test: ops complete fast enough (3B) ...
-  ... Passed --  21.6  3  4609    0
---- PASS: TestSpeed3B (21.59s)
+  ... Passed --   7.2  3  9130    0
+--- PASS: TestSpeed3B (7.25s)
 === RUN   TestSnapshotRecover3B
 Test: restarts, snapshots, one client (3B) ...
-  ... Passed --  19.0  5  6863  702
---- PASS: TestSnapshotRecover3B (19.01s)
+  ... Passed --  18.9  5 38206 2068
+--- PASS: TestSnapshotRecover3B (18.94s)
 === RUN   TestSnapshotRecoverManyClients3B
 Test: restarts, snapshots, many clients (3B) ...
-  ... Passed --  20.6  5 47893 5986
---- PASS: TestSnapshotRecoverManyClients3B (20.59s)
+  ... Passed --  19.4  5 380282 18266
+--- PASS: TestSnapshotRecoverManyClients3B (19.44s)
 === RUN   TestSnapshotUnreliable3B
 Test: unreliable net, snapshots, many clients (3B) ...
-  ... Passed --  23.4  5  4779  416
---- PASS: TestSnapshotUnreliable3B (23.42s)
+  ... Passed --  17.9  5  5455  490
+--- PASS: TestSnapshotUnreliable3B (17.88s)
 === RUN   TestSnapshotUnreliableRecover3B
 Test: unreliable net, restarts, snapshots, many clients (3B) ...
-  ... Passed --  25.6  5  5828  312
---- PASS: TestSnapshotUnreliableRecover3B (25.64s)
+  ... Passed --  24.3  5  6362  562
+--- PASS: TestSnapshotUnreliableRecover3B (24.32s)
 === RUN   TestSnapshotUnreliableRecoverConcurrentPartition3B
 Test: unreliable net, restarts, partitions, snapshots, many clients (3B) ...
-  ... Passed --  33.1  5  6655  421
---- PASS: TestSnapshotUnreliableRecoverConcurrentPartition3B (33.08s)
+  ... Passed --  28.1  5  6812  527
+--- PASS: TestSnapshotUnreliableRecoverConcurrentPartition3B (28.06s)
 === RUN   TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable3B
 Test: unreliable net, restarts, partitions, snapshots, random keys, many clients (3B) ...
-  ... Passed --  50.1  7 25406  512
---- PASS: TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable3B (50.12s)
+  ... Passed --  33.8  7 18801  978
+--- PASS: TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable3B (33.80s)
 PASS

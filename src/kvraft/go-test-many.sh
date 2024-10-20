@@ -136,7 +136,7 @@ cleanup() {
 	for pid in "${waits[@]}"; do
 		kill "$pid"
 		wait "$pid"
-		rm -rf "$OUTPUT_DIR/test-${prefix}-${label}-${is[0]}.err" "$OUTPUT_DIR/test-${prefix}-${label}-${is[0]}.log"
+		rm -rf "$OUTPUT_DIR/test-${prefix}-${label}-${is[0]}.err" "$OUTPUT_DIR/test-${prefix}-${label}-${is[0]}.log" "$OUTPUT_DIR/tester-${prefix}-${label}"
 		is=("${is[@]:1}")
 	done
 	exit 0
