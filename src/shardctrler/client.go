@@ -32,7 +32,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	// Your code here.
 	ck.clientId = nrand()
-	atomic.StoreInt64(&ck.sequenceNum, 0)
+	atomic.StoreInt64(&ck.sequenceNum, 1)
 	return ck
 }
 

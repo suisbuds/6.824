@@ -48,7 +48,7 @@ type ShardCtrler struct {
 type Op struct {
 	// Your data here.
 	Type        int
-	Serevrs     map[int][]string
+	Servers     map[int][]string
 	GIDs        []int
 	Shard       int
 	GID         int
@@ -61,7 +61,7 @@ func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
 	// Your code here.
 	_, _, isLeader := sc.rf.Start(Op{
 		Type:        JOIN,
-		Serevrs:     args.Servers,
+		Servers:     args.Servers,
 		ClientId:    args.ClientId,
 		SequenceNum: args.SequenceNum},
 	)
@@ -124,7 +124,8 @@ func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 	// Your code here.
 	_, _, isLeader := sc.rf.Start(Op{
-		Type:        JOIN,
+		// BUG:参数写错了
+		Type:        MOVE,
 		Shard:       args.Shard,
 		GID:         args.GID,
 		ClientId:    args.ClientId,
@@ -158,7 +159,8 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
 
 	_, _, isLeader := sc.rf.Start(Op{
-		Type:        JOIN,
+		// BUG:参数写错了
+		Type:        QUERY,
 		Num:         args.Num,
 		ClientId:    args.ClientId,
 		SequenceNum: args.SequenceNum},
@@ -238,7 +240,7 @@ func (sc *ShardCtrler) joinTask(op Op) {
 		groups[k] = v
 	}
 	// 添加group
-	for k, v := range op.Serevrs {
+	for k, v := range op.Servers {
 		groups[k] = v
 	}
 	config.Groups = groups
@@ -344,6 +346,12 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sc.configs = make([]Config, 1)
 	sc.configs[0].Groups = map[int][]string{}
 
+	// BUG:忘记初始化
+	// 第一个配置的编号为0，所有shards都属于 group 0
+	for i := 0; i < NShards; i++ {
+		sc.configs[0].Shards[i] = 0
+	}
+
 	labgob.Register(Op{})
 	sc.applyCh = make(chan raft.ApplyMsg)
 	sc.rf = raft.Make(servers, me, persister, sc.applyCh)
@@ -351,7 +359,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	// Your code here.
 	sc.clientSequenceNums = make(map[int64]int64)
 	sc.queryBuffer = make(map[int64]Config)
-
 	go sc.receiveMsg()
 	return sc
 }
