@@ -7,7 +7,7 @@
   - [x] Lab2D: Log Compaction
 - [ ] Lab 3: Fault-tolerant Key/Value Service
   - [x] Lab3A: Key/Value Service Without Snapshots
-  - [x] Lab3B: Key/Value Service With Snapshots 
-- [ ] Lab 4: Sharded Key/Value Service (Currently working on)
-  - [ ] Lab4A: The Shard Controller
-  - [ ] Lab4B: Sharded Key/Value Server
+  - [x] Lab3B: Key/Value Service With Snapshots (Pass all tests, but don't promise bug-free)
+- [x] Lab 4: Sharded Key/Value Service 
+  - [x] Lab4A: The Shard Controller
+  - [ ] Lab4B: Sharded Key/Value Server (Currently working on)
