@@ -1,7 +1,10 @@
 package shardctrler
 
 import (
+	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"6.824/labgob"
 	"6.824/labrpc"
@@ -16,6 +19,17 @@ const (
 	ASKSHARDS = 4
 )
 
+const Debug = false
+
+func DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		if debug {
+			log.Printf(format, a...)
+		}
+	}
+	return
+}
+
 type ShardCtrler struct {
 	mu      sync.Mutex
 	me      int
@@ -24,11 +38,12 @@ type ShardCtrler struct {
 
 	// Your data here.
 
-	configs         []Config         // indexed by config num
-	maxSequenceNums map[int64]int64  // 去重
-	queryBuffer     map[int64]Config // client执行query时应该返回的config
+	configs            []Config         // indexed by config num
+	clientSequenceNums map[int64]int64  // 去重
+	queryBuffer        map[int64]Config // client执行query时应该返回的config
 }
 
+// 包含operation里出现的所有字段
 type Op struct {
 	// Your data here.
 	Type        int
@@ -43,18 +58,133 @@ type Op struct {
 
 func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
 	// Your code here.
+	_, _, isLeader := sc.rf.Start(Op{
+		Type:        JOIN,
+		Serevrs:     args.Servers,
+		ClientId:    args.ClientId,
+		SequenceNum: args.SequenceNum},
+	)
+	if !isLeader {
+		return
+	}
+
+	var timeout int32 = 0
+	go func() {
+		time.Sleep(1000 * time.Millisecond)
+		atomic.StoreInt32(&timeout, 1)
+	}()
+
+	for {
+		if atomic.LoadInt32(&timeout) == 1 {
+			return
+		}
+		sc.mu.Lock()
+		if sc.clientSequenceNums[args.ClientId] >= args.SequenceNum {
+			reply.Done = true
+			sc.mu.Unlock()
+			return
+		}
+		sc.mu.Unlock()
+	}
 }
 
 func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 	// Your code here.
+	_, _, isLeader := sc.rf.Start(Op{
+		Type:        LEAVE,
+		GIDs:        args.GIDs,
+		ClientId:    args.ClientId,
+		SequenceNum: args.SequenceNum},
+	)
+	if !isLeader {
+		return
+	}
+
+	var timeout int32 = 0
+	go func() {
+		time.Sleep(1000 * time.Millisecond)
+		atomic.StoreInt32(&timeout, 1)
+	}()
+
+	for {
+		if atomic.LoadInt32(&timeout) == 1 {
+			return
+		}
+		sc.mu.Lock()
+		if sc.clientSequenceNums[args.ClientId] >= args.SequenceNum {
+			reply.Done = true
+			sc.mu.Unlock()
+			return
+		}
+		sc.mu.Unlock()
+	}
 }
 
 func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 	// Your code here.
+	_, _, isLeader := sc.rf.Start(Op{
+		Type:        JOIN,
+		Shard:       args.Shard,
+		GID:         args.GID,
+		ClientId:    args.ClientId,
+		SequenceNum: args.SequenceNum},
+	)
+	if !isLeader {
+		return
+	}
+
+	var timeout int32 = 0
+	go func() {
+		time.Sleep(1000 * time.Millisecond)
+		atomic.StoreInt32(&timeout, 1)
+	}()
+
+	for {
+		if atomic.LoadInt32(&timeout) == 1 {
+			return
+		}
+		sc.mu.Lock()
+		if sc.clientSequenceNums[args.ClientId] >= args.SequenceNum {
+			reply.Done = true
+			sc.mu.Unlock()
+			return
+		}
+		sc.mu.Unlock()
+	}
 }
 
 func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
+
+	_, _, isLeader := sc.rf.Start(Op{
+		Type:        JOIN,
+		Num:         args.Num,
+		ClientId:    args.ClientId,
+		SequenceNum: args.SequenceNum},
+	)
+	if !isLeader {
+		return
+	}
+
+	var timeout int32 = 0
+	go func() {
+		time.Sleep(1000 * time.Millisecond)
+		atomic.StoreInt32(&timeout, 1)
+	}()
+
+	for {
+		if atomic.LoadInt32(&timeout) == 1 {
+			return
+		}
+		sc.mu.Lock()
+		if sc.clientSequenceNums[args.ClientId] >= args.SequenceNum {
+			reply.Config = sc.queryBuffer[args.ClientId]
+			reply.Done = true
+			sc.mu.Unlock()
+			return
+		}
+		sc.mu.Unlock()
+	}
 }
 
 // the tester calls Kill() when a ShardCtrler instance won't
