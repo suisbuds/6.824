@@ -41,8 +41,8 @@ type JoinArgs struct {
 }
 
 type JoinReply struct {
-	WrongLeader bool
-	Err         Err
+	Done bool
+	Err  Err
 }
 
 type LeaveArgs struct {
@@ -52,8 +52,8 @@ type LeaveArgs struct {
 }
 
 type LeaveReply struct {
-	WrongLeader bool
-	Err         Err
+	Done bool
+	Err  Err
 }
 
 type MoveArgs struct {
@@ -64,8 +64,8 @@ type MoveArgs struct {
 }
 
 type MoveReply struct {
-	WrongLeader bool
-	Err         Err
+	Done bool
+	Err  Err
 }
 
 type QueryArgs struct {
@@ -75,9 +75,9 @@ type QueryArgs struct {
 }
 
 type QueryReply struct {
-	WrongLeader bool
-	Err         Err
-	Config      Config
+	Done   bool
+	Err    Err
+	Config Config
 }
 
 type GetShardArgs struct {
@@ -87,7 +87,7 @@ type GetShardArgs struct {
 }
 
 type GetShardReply struct {
-	WrongLeader bool
-	Err         Err
-	Config      Config
+	Done   bool
+	Err    Err
+	Config Config
 }

@@ -70,7 +70,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 		for _, srv := range ck.servers {
 			var reply JoinReply
 			ok := srv.Call("ShardCtrler.Join", args, &reply)
-			if ok && reply.WrongLeader == false {
+			if ok && reply.Done == false {
 				return
 			}
 		}
