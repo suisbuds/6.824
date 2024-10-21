@@ -16,6 +16,8 @@ type ShardCtrler struct {
 	// Your data here.
 
 	configs []Config // indexed by config num
+	maxSequenceNums  map[int64]int64 // 去重
+	queryBuffer map[int64]Config // client执行query时应该返回的config
 }
 
 

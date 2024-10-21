@@ -36,7 +36,7 @@ type KVServer struct {
 	// Your definitions here.
 	// persistent data
 	data            map[string]string // record key-value pairs
-	maxSequenceNums map[int64]int64   // record the max sequence number of each client, avoid duplicate operation
+	clientSequenceNums map[int64]int64   // record the max sequence number of each client, avoid duplicate operation
 	applyIndex      int               // client apply max command index, to compact log
 
 }
@@ -77,7 +77,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 		kv.mu.Lock()
 		// 利用操作序列单调递增的特性，判断Command是否提交和执行
-		if kv.maxSequenceNums[args.ClientId] >= args.SequenceNum {
+		if kv.clientSequenceNums[args.ClientId] >= args.SequenceNum {
 			DPrintf(false, "server-[%d] Get Command %s", kv.me, OK)
 			reply.Value = kv.data[args.Key]
 			kv.mu.Unlock()
@@ -130,7 +130,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			return
 		}
 		kv.mu.Lock()
-		if kv.maxSequenceNums[args.ClientId] >= args.SequenceNum {
+		if kv.clientSequenceNums[args.ClientId] >= args.SequenceNum {
 			kv.mu.Unlock()
 			DPrintf(false, "server-[%d] PutAppend Command %s", kv.me, OK)
 			return
@@ -185,21 +185,21 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	kv.data = map[string]string{}
-	kv.maxSequenceNums = map[int64]int64{}
+	kv.clientSequenceNums = map[int64]int64{}
 
 	// You may need initialization code here.
 
 	var data map[string]string
-	var maxSequenceNums map[int64]int64
+	var clientSequenceNums map[int64]int64
 	var applyIndex int
 	snapshot := persister.ReadSnapshot()
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
 	// Don't find error, restore server state
-	if d.Decode(&data) == nil && d.Decode(&maxSequenceNums) == nil && d.Decode(&applyIndex) == nil {
+	if d.Decode(&data) == nil && d.Decode(&clientSequenceNums) == nil && d.Decode(&applyIndex) == nil {
 		kv.mu.Lock()
 		kv.data = data
-		kv.maxSequenceNums = maxSequenceNums
+		kv.clientSequenceNums = clientSequenceNums
 		kv.applyIndex = applyIndex
 		kv.mu.Unlock()
 	}
@@ -223,29 +223,29 @@ func (kv *KVServer) receiveMsg() {
 			kv.doOperation(op)
 			kv.mu.Unlock()
 			// NOTE:修改这里
-			if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
-				kv.snapshot()
-			}
+			// if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
+			// 	kv.snapshot()
+			// }
 		} else if msg.SnapshotValid {
 			// Snapshot command
 
 			var data map[string]string
-			var maxSequenceNums map[int64]int64
+			var clientSequenceNums map[int64]int64
 			r := bytes.NewBuffer(msg.Snapshot)
 			d := labgob.NewDecoder(r)
 
-			if d.Decode(&data) == nil && d.Decode(&maxSequenceNums) == nil {
+			if d.Decode(&data) == nil && d.Decode(&clientSequenceNums) == nil {
 				// replace local server state with snapshot data
 				kv.mu.Lock()
 				kv.data = data
-				kv.maxSequenceNums = maxSequenceNums
+				kv.clientSequenceNums = clientSequenceNums
 				kv.applyIndex = msg.SnapshotIndex
 				kv.mu.Unlock()
 			}
 			// NOTE:修改这里
-			if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
-				kv.snapshot()
-			}
+			// if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
+			// 	kv.snapshot()
+			// }
 		}
 	}
 }
@@ -267,11 +267,11 @@ func (kv *KVServer) trySnapshot() {
 // according to the operation type, do the corresponding operation
 func (kv *KVServer) doOperation(op Op) {
 	// 客户端的操作序号单调递增，说明此操作执行过了
-	if kv.maxSequenceNums[op.ClientId] >= op.SequenceNum {
+	if kv.clientSequenceNums[op.ClientId] >= op.SequenceNum {
 		return
 	}
 	// 更新操作序号并执行操作
-	kv.maxSequenceNums[op.ClientId] = op.SequenceNum
+	kv.clientSequenceNums[op.ClientId] = op.SequenceNum
 	switch op.OperationType {
 	case GET:
 		return
@@ -289,7 +289,7 @@ func (kv *KVServer) snapshot() {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(kv.data)
-	e.Encode(kv.maxSequenceNums)
+	e.Encode(kv.clientSequenceNums)
 	e.Encode(kv.applyIndex)
 
 	applyIndex := kv.applyIndex // 当前已运行的最大操作序号
