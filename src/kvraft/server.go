@@ -158,58 +158,6 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-// servers[] contains the ports of the set of
-// servers that will cooperate via Raft to
-// form the fault-tolerant key/value service.
-// me is the index of the current server in servers[].
-// the k/v server should store snapshots through the underlying Raft
-// implementation, which should call persister.SaveStateAndSnapshot() to
-// atomically save the Raft state along with the snapshot.
-// the k/v server should snapshot when Raft's saved state exceeds maxraftstate bytes,
-// in order to allow Raft to garbage-collect its log. if maxraftstate is -1,
-// you don't need to snapshot.
-// StartKVServer() must return quickly, so it should start goroutines
-// for any long-running work.
-func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
-	// call labgob.Register on structures you want
-	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
-
-	kv := new(KVServer)
-	kv.me = me
-	kv.maxraftstate = maxraftstate
-
-	// You may need initialization code here.
-
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
-	kv.data = map[string]string{}
-	kv.clientSequenceNums = map[int64]int64{}
-
-	// You may need initialization code here.
-
-	var data map[string]string
-	var clientSequenceNums map[int64]int64
-	var applyIndex int
-	snapshot := persister.ReadSnapshot()
-	r := bytes.NewBuffer(snapshot)
-	d := labgob.NewDecoder(r)
-	// Don't find error, restore server state
-	if d.Decode(&data) == nil && d.Decode(&clientSequenceNums) == nil && d.Decode(&applyIndex) == nil {
-		kv.mu.Lock()
-		kv.data = data
-		kv.clientSequenceNums = clientSequenceNums
-		kv.applyIndex = applyIndex
-		kv.mu.Unlock()
-	}
-
-	// keep running goroutine for receiving Msg and trying Snapshot
-	go kv.receiveMsg()
-	go kv.trySnapshot()
-	return kv
-}
-
 // receive commited logs from kv.applyCh
 func (kv *KVServer) receiveMsg() {
 	for !kv.killed() {
@@ -296,3 +244,57 @@ func (kv *KVServer) snapshot() {
 	snapshot := w.Bytes()       // sever run state
 	kv.rf.Snapshot(applyIndex, snapshot)
 }
+
+
+// servers[] contains the ports of the set of
+// servers that will cooperate via Raft to
+// form the fault-tolerant key/value service.
+// me is the index of the current server in servers[].
+// the k/v server should store snapshots through the underlying Raft
+// implementation, which should call persister.SaveStateAndSnapshot() to
+// atomically save the Raft state along with the snapshot.
+// the k/v server should snapshot when Raft's saved state exceeds maxraftstate bytes,
+// in order to allow Raft to garbage-collect its log. if maxraftstate is -1,
+// you don't need to snapshot.
+// StartKVServer() must return quickly, so it should start goroutines
+// for any long-running work.
+func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
+	// call labgob.Register on structures you want
+	// Go's RPC library to marshall/unmarshall.
+	labgob.Register(Op{})
+
+	kv := new(KVServer)
+	kv.me = me
+	kv.maxraftstate = maxraftstate
+
+	// You may need initialization code here.
+
+	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+
+	kv.data = map[string]string{}
+	kv.clientSequenceNums = map[int64]int64{}
+
+	// You may need initialization code here.
+
+	var data map[string]string
+	var clientSequenceNums map[int64]int64
+	var applyIndex int
+	snapshot := persister.ReadSnapshot()
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	// Don't find error, restore server state
+	if d.Decode(&data) == nil && d.Decode(&clientSequenceNums) == nil && d.Decode(&applyIndex) == nil {
+		kv.mu.Lock()
+		kv.data = data
+		kv.clientSequenceNums = clientSequenceNums
+		kv.applyIndex = applyIndex
+		kv.mu.Unlock()
+	}
+
+	// keep running goroutine for receiving Msg and trying Snapshot
+	go kv.receiveMsg()
+	go kv.trySnapshot()
+	return kv
+}
+

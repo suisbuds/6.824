@@ -201,6 +201,8 @@ func (sc *ShardCtrler) Raft() *raft.Raft {
 	return sc.rf
 }
 
+func (sc *ShardCtrler) receiveMsg() {}
+
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
 // form the fault-tolerant shardctrler service.
@@ -217,6 +219,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sc.rf = raft.Make(servers, me, persister, sc.applyCh)
 
 	// Your code here.
+	sc.clientSequenceNums = make(map[int64]int64)
+	sc.queryBuffer = make(map[int64]Config)
 
+	go sc.receiveMsg()
 	return sc
 }

@@ -140,7 +140,7 @@ func (rf *Raft) persist() {
 	raftstate := w.Bytes()
 	//NOTE: 不会检查snapshot大小
 	rf.persister.SaveRaftState(raftstate)
-	rf.DPrintf(false,"persist() raftstate size = %d", len(raftstate))
+	rf.DPrintf(false, "persist() raftstate size = %d", len(raftstate))
 }
 
 // restore previously persisted state.
@@ -207,7 +207,7 @@ func (rf *Raft) persistSnapshot(snapshot []byte) {
 	e.Encode(rf.LastIncludedTerm)
 	raftstate := w.Bytes()
 	rf.persister.SaveStateAndSnapshot(raftstate, snapshot)
-	rf.DPrintf(false,"persistSnapshot() raftstate size = %d", len(raftstate))
+	rf.DPrintf(false, "persistSnapshot() raftstate size = %d", len(raftstate))
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -639,46 +639,7 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// the service or tester wants to create a Raft server. the ports
-// of all the Raft servers (including this one) are in peers[]. this
-// server's port is peers[me]. all the servers' peers[] arrays
-// have the same order. persister is a place for this server to
-// save its persistent state, and also initially holds the most
-// recent saved state, if any. applyCh is a channel on which the
-// tester or service expects Raft to send ApplyMsg messages.
-// Make() must return quickly, so it should start goroutines
-// for any long-running work.
-func Make(peers []*labrpc.ClientEnd, me int,
-	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	rf := &Raft{}
 
-	rf.mu.Lock()
-
-	rf.peers = peers
-	rf.persister = persister
-	rf.me = me
-	rf.applyCh = applyCh
-	rf.cond = sync.NewCond(&rf.mu)
-	// Your initialization code here (2A, 2B, 2C).
-
-	rf.DPrintf(false, "rf-[%d] is Making, Len(peers) = %d", me, len(peers))
-	rf.BroadcastTime = BROADCAST_TIME
-	rf.ElectionTimeout = GetElectionTimeout() // 初始化，随机选举超时
-	rf.Role = FOLLOWER                        // 初始化为follower
-	rf.CurrentTerm = 0
-	rf.VotedFor = -1 // 未投票状态
-	rf.MatchIndex = make([]int, len(peers))
-	rf.NextIndex = make([]int, len(peers))
-
-	// initialize from state persisted after crash
-	rf.readPersist(persister.ReadRaftState())
-	rf.mu.Unlock()
-
-	// keep running ticker goroutine for  elections
-	go rf.ticker()
-
-	return rf
-}
 
 /*
 * atomic operation, don't need to add lock
@@ -694,7 +655,7 @@ func (rf *Raft) doLeaderTask() {
 		atomic.AddInt32(&rf.quickCommitCheck, -1)
 		rf.updateCommitIndex()
 		// NOTE:修改这里
-		time.Sleep(3*time.Millisecond) // 快速提交阶段，减少睡眠时间
+		time.Sleep(3 * time.Millisecond) // 快速提交阶段，减少睡眠时间
 	} else {
 		// Lab2
 		rf.trySendEntries()
@@ -1054,4 +1015,47 @@ func (rf *Raft) sendSnapshot(server int) {
 // use in lab3
 func (rf *Raft) RaftStateSize() int {
 	return rf.persister.RaftStateSize()
+}
+
+
+
+// the service or tester wants to create a Raft server. the ports
+// of all the Raft servers (including this one) are in peers[]. this
+// server's port is peers[me]. all the servers' peers[] arrays
+// have the same order. persister is a place for this server to
+// save its persistent state, and also initially holds the most
+// recent saved state, if any. applyCh is a channel on which the
+// tester or service expects Raft to send ApplyMsg messages.
+// Make() must return quickly, so it should start goroutines
+// for any long-running work.
+func Make(peers []*labrpc.ClientEnd, me int,
+	persister *Persister, applyCh chan ApplyMsg) *Raft {
+	rf := &Raft{}
+
+	rf.mu.Lock()
+
+	rf.peers = peers
+	rf.persister = persister
+	rf.me = me
+	rf.applyCh = applyCh
+	rf.cond = sync.NewCond(&rf.mu)
+	// Your initialization code here (2A, 2B, 2C).
+
+	rf.DPrintf(false, "rf-[%d] is Making, Len(peers) = %d", me, len(peers))
+	rf.BroadcastTime = BROADCAST_TIME
+	rf.ElectionTimeout = GetElectionTimeout() // 初始化，随机选举超时
+	rf.Role = FOLLOWER                        // 初始化为follower
+	rf.CurrentTerm = 0
+	rf.VotedFor = -1 // 未投票状态
+	rf.MatchIndex = make([]int, len(peers))
+	rf.NextIndex = make([]int, len(peers))
+
+	// initialize from state persisted after crash
+	rf.readPersist(persister.ReadRaftState())
+	rf.mu.Unlock()
+
+	// keep running ticker goroutine for  elections
+	go rf.ticker()
+
+	return rf
 }
