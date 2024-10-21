@@ -39,7 +39,12 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Query(num int) Config {
 	args := &QueryArgs{}
 	// Your code here.
+
+	atomic.AddInt64(&ck.sequenceNum, 1)
 	args.Num = num
+	args.ClientId = ck.clientId
+	args.SequenceNum = ck.sequenceNum
+
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -56,8 +61,10 @@ func (ck *Clerk) Query(num int) Config {
 func (ck *Clerk) Join(servers map[int][]string) {
 	args := &JoinArgs{}
 	// Your code here.
+	atomic.AddInt64(&ck.sequenceNum, 1)
 	args.Servers = servers
-
+	args.ClientId = ck.clientId
+	args.SequenceNum = ck.sequenceNum
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -74,8 +81,10 @@ func (ck *Clerk) Join(servers map[int][]string) {
 func (ck *Clerk) Leave(gids []int) {
 	args := &LeaveArgs{}
 	// Your code here.
+	atomic.AddInt64(&ck.sequenceNum, 1)
 	args.GIDs = gids
-
+	args.ClientId = ck.clientId
+	args.SequenceNum = ck.sequenceNum
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -92,8 +101,12 @@ func (ck *Clerk) Leave(gids []int) {
 func (ck *Clerk) Move(shard int, gid int) {
 	args := &MoveArgs{}
 	// Your code here.
+
+	atomic.AddInt64(&ck.sequenceNum, 1)
 	args.Shard = shard
 	args.GID = gid
+	args.ClientId = ck.clientId
+	args.SequenceNum = ck.sequenceNum
 
 	for {
 		// try each known server.
