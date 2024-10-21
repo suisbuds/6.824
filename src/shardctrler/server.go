@@ -213,7 +213,7 @@ func balance(shards int, gids []int) []int {
 	// 遍历gids
 	for i := 0; i < gidsSize; i++ {
 		n := 0
-		// 分配shards到groups
+		// 分配shards到groups,各组的shards数量差不超过1
 		if i < shards%gidsSize {
 			n = shards/gidsSize + 1
 		} else {
@@ -237,7 +237,7 @@ func (sc *ShardCtrler) joinTask(op Op) {
 	for k, v := range sc.configs[configsSize-1].Groups {
 		groups[k] = v
 	}
-	// 添加新servers
+	// 添加group
 	for k, v := range op.Serevrs {
 		groups[k] = v
 	}
@@ -256,7 +256,28 @@ func (sc *ShardCtrler) joinTask(op Op) {
 	sc.configs = append(sc.configs, config)
 }
 
-func (sc *ShardCtrler) leaveTask(op Op) {}
+func (sc *ShardCtrler) leaveTask(op Op) {
+	configsSize := len(sc.configs)
+	config := Config{Num: configsSize}
+	groups := make(map[int][]string)
+	for k, v := range sc.configs[configsSize-1].Groups {
+		groups[k] = v
+	}
+	// 删除group
+	for _, k := range op.GIDs {
+		delete(groups, k)
+	}
+	config.Groups = groups
+	var gids []int
+	for k := range groups {
+		gids = append(gids, k)
+	}
+	shards := balance(NShards, gids)
+	for i := 0; i < NShards; i++ {
+		config.Shards[i] = shards[i]
+	}
+	sc.configs = append(sc.configs, config)
+}
 
 func (sc *ShardCtrler) moveTask(op Op) {}
 
@@ -270,7 +291,7 @@ func (sc *ShardCtrler) queryTask(op Op, configsSize int) {
 	}
 }
 
-func (sc *ShardCtrler) doOperation(op Op) {
+func (sc *ShardCtrler) tryOperation(op Op) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	if sc.clientSequenceNums[op.ClientId] >= op.SequenceNum {
@@ -293,7 +314,7 @@ func (sc *ShardCtrler) doOperation(op Op) {
 func (sc *ShardCtrler) receiveMsg() {
 	for msg := range sc.applyCh {
 		op := msg.Command.(Op)
-		sc.doOperation(op)
+		sc.tryOperation(op)
 	}
 }
 
