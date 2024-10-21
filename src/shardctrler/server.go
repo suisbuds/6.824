@@ -279,7 +279,22 @@ func (sc *ShardCtrler) leaveTask(op Op) {
 	sc.configs = append(sc.configs, config)
 }
 
-func (sc *ShardCtrler) moveTask(op Op) {}
+func (sc *ShardCtrler) moveTask(op Op) {
+	configsSize := len(sc.configs)
+	config := Config{Num: configsSize}
+	groups := make(map[int][]string)
+	for k, v := range sc.configs[configsSize-1].Groups {
+		groups[k] = v
+	}
+
+	config.Groups = groups
+	// 移动shard
+	for i := 0; i < NShards; i++ {
+		config.Shards[i] = sc.configs[configsSize-1].Shards[i]
+	}
+	config.Shards[op.Shard] = op.GID
+	sc.configs = append(sc.configs, config)
+}
 
 func (sc *ShardCtrler) queryTask(op Op, configsSize int) {
 	// 缓存，防止config返回client前被修改
