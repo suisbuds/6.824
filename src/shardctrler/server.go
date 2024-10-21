@@ -12,14 +12,6 @@ import (
 	"6.824/raft"
 )
 
-const (
-	JOIN      = 0
-	LEAVE     = 1
-	MOVE      = 2
-	QUERY     = 3
-	ASKSHARDS = 4
-)
-
 const Debug = false
 
 func DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
@@ -30,6 +22,14 @@ func DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
 	}
 	return
 }
+
+const (
+	JOIN      = 0
+	LEAVE     = 1
+	MOVE      = 2
+	QUERY     = 3
+	ASKSHARDS = 4
+)
 
 type ShardCtrler struct {
 	mu      sync.Mutex
