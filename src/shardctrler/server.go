@@ -178,6 +178,7 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 		}
 		sc.mu.Lock()
 		if sc.clientSequenceNums[args.ClientId] >= args.SequenceNum {
+			// client 串行访问shard controller，所以可以用clientId保存读取结果
 			reply.Config = sc.queryBuffer[args.ClientId]
 			reply.Done = true
 			sc.mu.Unlock()
@@ -201,7 +202,48 @@ func (sc *ShardCtrler) Raft() *raft.Raft {
 	return sc.rf
 }
 
-func (sc *ShardCtrler) receiveMsg() {}
+func (sc *ShardCtrler) joinTask(op Op) {}
+
+func (sc *ShardCtrler) leaveTask(op Op) {}
+
+func (sc *ShardCtrler) moveTask(op Op) {}
+
+func (sc *ShardCtrler) queryTask(op Op, configsSize int) {
+	// 缓存，防止config返回client前被修改
+	if op.Num == -1 || op.Num >= configsSize {
+		// 返回最新配置
+		sc.queryBuffer[op.ClientId] = sc.configs[configsSize-1]
+	} else {
+		sc.queryBuffer[op.ClientId] = sc.configs[op.Num]
+	}
+}
+
+func (sc *ShardCtrler) doOperation(op Op) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if sc.clientSequenceNums[op.ClientId] >= op.SequenceNum {
+		return
+	}
+	sc.clientSequenceNums[op.ClientId] = op.SequenceNum
+	configsSize := len(sc.configs)
+	switch op.Type {
+	case JOIN:
+		sc.joinTask(op)
+	case LEAVE:
+		sc.leaveTask(op)
+	case MOVE:
+		sc.moveTask(op)
+	case QUERY:
+		sc.queryTask(op, configsSize)
+	}
+}
+
+func (sc *ShardCtrler) receiveMsg() {
+	for msg := range sc.applyCh {
+		op := msg.Command.(Op)
+		sc.doOperation(op)
+	}
+}
 
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
