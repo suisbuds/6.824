@@ -2,6 +2,7 @@ package shardctrler
 
 import (
 	"log"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -202,7 +203,58 @@ func (sc *ShardCtrler) Raft() *raft.Raft {
 	return sc.rf
 }
 
-func (sc *ShardCtrler) joinTask(op Op) {}
+// 负载均衡，将shards平均分配到gids
+func balance(shards int, gids []int) []int {
+
+	gidsSize := len(gids)
+	sort.Ints(gids)
+	ret := make([]int, shards)
+	index := 0
+	// 遍历gids
+	for i := 0; i < gidsSize; i++ {
+		n := 0
+		// 分配shards到groups
+		if i < shards%gidsSize {
+			n = shards/gidsSize + 1
+		} else {
+			n = shards / gidsSize
+		}
+		// 在group内分配shards给 Group ID
+		for j := 0; j < n; j++ {
+			ret[index+j] = gids[i]
+		}
+		index += n
+	}
+	return ret
+}
+
+func (sc *ShardCtrler) joinTask(op Op) {
+	// 创建新配置，并复制现有group
+	configsSize := len(sc.configs)
+	config := Config{Num: configsSize}
+	// map是引用类型，采取复制的方法而不是创建新引用
+	groups := make(map[int][]string)
+	for k, v := range sc.configs[configsSize-1].Groups {
+		groups[k] = v
+	}
+	// 添加新servers
+	for k, v := range op.Serevrs {
+		groups[k] = v
+	}
+	config.Groups = groups
+	var gids []int
+	// 收集group id
+	for k := range groups {
+		gids = append(gids, k)
+	}
+	// Reshard
+	shards := balance(NShards, gids)
+	for i := 0; i < NShards; i++ {
+		config.Shards[i] = shards[i]
+	}
+	// 更新配置列表
+	sc.configs = append(sc.configs, config)
+}
 
 func (sc *ShardCtrler) leaveTask(op Op) {}
 
@@ -225,7 +277,7 @@ func (sc *ShardCtrler) doOperation(op Op) {
 		return
 	}
 	sc.clientSequenceNums[op.ClientId] = op.SequenceNum
-	configsSize := len(sc.configs)
+	configsSize := len(sc.configs) // op.Num = -1时返回最新配置
 	switch op.Type {
 	case JOIN:
 		sc.joinTask(op)
