@@ -1,11 +1,20 @@
 package shardctrler
 
+import (
+	"sync"
 
-import "6.824/raft"
-import "6.824/labrpc"
-import "sync"
-import "6.824/labgob"
+	"6.824/labgob"
+	"6.824/labrpc"
+	"6.824/raft"
+)
 
+const (
+	JOIN      = 0
+	LEAVE     = 1
+	MOVE      = 2
+	QUERY     = 3
+	ASKSHARDS = 4
+)
 
 type ShardCtrler struct {
 	mu      sync.Mutex
@@ -15,16 +24,22 @@ type ShardCtrler struct {
 
 	// Your data here.
 
-	configs []Config // indexed by config num
-	maxSequenceNums  map[int64]int64 // 去重
-	queryBuffer map[int64]Config // client执行query时应该返回的config
+	configs         []Config         // indexed by config num
+	maxSequenceNums map[int64]int64  // 去重
+	queryBuffer     map[int64]Config // client执行query时应该返回的config
 }
-
 
 type Op struct {
 	// Your data here.
+	Type        int
+	Serevrs     map[int][]string
+	GIDs        []int
+	Shard       int
+	GID         int
+	Num         int // desired config number
+	ClientId    int64
+	SequenceNum int64
 }
-
 
 func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
 	// Your code here.
@@ -42,13 +57,10 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
 }
 
-
-//
 // the tester calls Kill() when a ShardCtrler instance won't
 // be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
-//
 func (sc *ShardCtrler) Kill() {
 	sc.rf.Kill()
 	// Your code here, if desired.
@@ -59,12 +71,10 @@ func (sc *ShardCtrler) Raft() *raft.Raft {
 	return sc.rf
 }
 
-//
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
 // form the fault-tolerant shardctrler service.
 // me is the index of the current server in servers[].
-//
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister) *ShardCtrler {
 	sc := new(ShardCtrler)
 	sc.me = me
