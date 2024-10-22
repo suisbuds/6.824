@@ -77,12 +77,12 @@ type mvShard struct {
 }
 
 type SnapshotData struct {
-	data               []map[string]string
-	clientSequenceNums []map[int64]int64
-	serverSequenceNums []map[int64]int64
-	curShards          []bool
-	tasks              []mvShard
-	initialize         bool
+	Data               []map[string]string
+	ClientSequenceNums []map[int64]int64
+	ServerSequenceNums []map[int64]int64
+	CurShards          []bool
+	Tasks              []mvShard
+	Initialize         bool
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
@@ -147,11 +147,11 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	case "Append":
 		opType = APPEND
 	}
-	
+
 	_, _, isLeader := kv.rf.Start(Op{
 		Type:        opType,
 		Key:         args.Key,
-		Val: 	   args.Value,
+		Val:         args.Value,
 		Shard:       args.Shard,
 		ClientId:    args.ClientId,
 		SequenceNum: args.SequenceNum,
@@ -228,6 +228,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
+	labgob.Register(SnapshotData{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -264,12 +265,12 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	d := labgob.NewDecoder(r)
 	if d.Decode(&snapshotData) == nil {
 		kv.mu.Lock()
-		kv.data = snapshotData.data
-		kv.clientSequenceNums = snapshotData.clientSequenceNums
-		kv.serverSequenceNums = snapshotData.serverSequenceNums
-		kv.curShards = snapshotData.curShards
-		kv.tasks = snapshotData.tasks
-		kv.initialize = snapshotData.initialize
+		kv.data = snapshotData.Data
+		kv.clientSequenceNums = snapshotData.ClientSequenceNums
+		kv.serverSequenceNums = snapshotData.ServerSequenceNums
+		kv.curShards = snapshotData.CurShards
+		kv.tasks = snapshotData.Tasks
+		kv.initialize = snapshotData.Initialize
 		kv.mu.Unlock()
 	}
 
