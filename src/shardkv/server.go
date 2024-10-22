@@ -512,6 +512,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		kv.serverSequenceNums[i] = make(map[int64]int64)
 	}
 
+	
 	// // 读取快照，服务器运行状态的字段都要保存
 	// var snapshotData SnapshotData
 	// snapshot := persister.ReadSnapshot()
