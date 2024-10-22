@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"6.824/labgob"
 	"6.824/labrpc"
@@ -85,6 +87,46 @@ type SnapshotData struct {
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	kv.mu.Lock()
+	// 确认shard是否在group的管理内
+	if kv.config.Shards[args.Shard] != kv.gid || !kv.curShards[args.Shard] {
+		reply.Err = ErrWrongGroup
+		kv.mu.Unlock()
+		return
+	}
+
+	kv.mu.Unlock()
+	_, _, isLeader := kv.rf.Start(Op{
+		Type:        GET,
+		Key:         args.Key,
+		Shard:       args.Shard,
+		ClientId:    args.ClientId,
+		SequenceNum: args.SequenceNum,
+	})
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	var timeout int32 = 0
+	go func() {
+		time.Sleep(1000 * time.Millisecond)
+		atomic.StoreInt32(&timeout, 1)
+	}()
+	for {
+		if atomic.LoadInt32(&timeout) == 1 {
+			reply.Err = ErrTimeout
+			return
+		}
+		kv.mu.Lock()
+		if kv.clientSequenceNums[args.Shard][args.ClientId] >= args.SequenceNum {
+			reply.Value = kv.data[args.Shard][args.Key]
+			reply.Err = OK
+			kv.mu.Unlock()
+			return
+		}
+		kv.mu.Unlock()
+	}
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
