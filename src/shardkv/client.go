@@ -136,31 +136,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	}
 }
 
-// PutShard RPC
-func (kv *ShardKV) PutShard(task mvShard) {
-	args := PutShardArgs{}
-	args.Shard = task.Shard
-	args.Data = task.ShardData
-	args.ClientId = int64(kv.gid)
-	args.SequenceNum = int64(task.Config)
-	args.ClientSequenceNums = task.ShardSequence
-	args.Buffer = task.ShardBuffer
-	servers := task.Servers
-	kv.mu.Unlock()
-	for {
-		// 参考 client
-		// try each server for the shard.
-		for si := 0; si < len(servers); si++ {
-			srv := kv.make_end(servers[si])
-			var reply PutShardReply
-			ok := srv.Call("ShardKV.PutShard", &args, &reply)
-			if ok && reply.Done {
-				kv.mu.Lock()
-				return
-			}
-		}
-	}
-}
 
 func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")

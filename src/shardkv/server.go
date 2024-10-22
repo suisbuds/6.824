@@ -187,6 +187,39 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 }
 
+// PutShard RPC
+func (kv *ShardKV) PutShard(args *PutShardArgs, reply *PutShardReply) {
+	_, _, isLeader := kv.rf.Start(Op{
+		Type:          PUTSHARD,
+		Shard:         args.Shard,
+		ShardData:     args.Data,
+		ShardSequence: args.ClientSequenceNums,
+		ClientId:      args.ClientId,
+		SequenceNum:   args.SequenceNum,
+	})
+	if !isLeader {
+		return
+	}
+
+	var timeout int32 = 0
+	go func() {
+		time.Sleep(1000 * time.Millisecond)
+		atomic.StoreInt32(&timeout, 1)
+	}()
+	for {
+		if atomic.LoadInt32(&timeout) == 1 {
+			return
+		}
+		kv.mu.Lock()
+		if kv.clientSequenceNums[args.Shard][args.ClientId] >= args.SequenceNum {
+			reply.Done = true
+			kv.mu.Unlock()
+			return
+		}
+		kv.mu.Unlock()
+	}
+}
+
 // the tester calls Kill() when a ShardKV instance won't
 // be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
