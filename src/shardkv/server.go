@@ -131,6 +131,54 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	kv.mu.Lock()
+	// 确认shard是否在group的管理内
+	if kv.config.Shards[args.Shard] != kv.gid || !kv.curShards[args.Shard] {
+		reply.Err = ErrWrongGroup
+		kv.mu.Unlock()
+		return
+	}
+	kv.mu.Unlock()
+
+	var opType int
+	switch args.Op {
+	case "Put":
+		opType = PUT
+	case "Append":
+		opType = APPEND
+	}
+	
+	_, _, isLeader := kv.rf.Start(Op{
+		Type:        opType,
+		Key:         args.Key,
+		Val: 	   args.Value,
+		Shard:       args.Shard,
+		ClientId:    args.ClientId,
+		SequenceNum: args.SequenceNum,
+	})
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	var timeout int32 = 0
+	go func() {
+		time.Sleep(1000 * time.Millisecond)
+		atomic.StoreInt32(&timeout, 1)
+	}()
+	for {
+		if atomic.LoadInt32(&timeout) == 1 {
+			reply.Err = ErrTimeout
+			return
+		}
+		kv.mu.Lock()
+		if kv.clientSequenceNums[args.Shard][args.ClientId] >= args.SequenceNum {
+			reply.Err = OK
+			kv.mu.Unlock()
+			return
+		}
+		kv.mu.Unlock()
+	}
 }
 
 // the tester calls Kill() when a ShardKV instance won't
