@@ -64,13 +64,13 @@ type ShardKV struct {
 	clientSequenceNums []map[int64]int64
 	applyIndex         int
 
-	curShards          []bool            // kv server's current shards
-	requiredShards     []bool            // kv server's required shards
+	curShards          []bool            // kv server 当前持有的 shards
+	requiredShards     []bool            // kv server's 需要的 shards
 	tasks              []mvShard         // shards 转移任务
 	serverSequenceNums []map[int64]int64 // 记录shards转移操作
 
-	NShards    int
-	initialize bool // 将分片分配至group时，记录server是否观察到config的初始化
+	NShards     int
+	checkConfig bool // 当 shards 再分配时，记录server是否观察到config的变化
 }
 
 type mvShard struct {
@@ -190,7 +190,56 @@ func (kv *ShardKV) Kill() {
 	// Your code here, if desired.
 }
 
-func (kv *ShardKV) updateConfig() {}
+
+func (kv *ShardKV) updateConfig() {
+	for {
+		kv.mu.Lock()
+		// _, isLeader := kv.rf.GetState()
+		kv.rf.Start(Op{})
+
+		// server 定期从 sm 获取最新 config，发现 config 变化时更新本地 config 和 requiredShards
+		config := kv.sm.Query(-1)
+		if config.Num != kv.config.Num && config.Num != 0 {
+			// 检查 config 1's GID == group's GID
+			if !kv.checkConfig {
+				// 通过 config 1 完成 shards 再分配
+				firstConfig := kv.sm.Query(1)
+				for i := range kv.config.Shards {
+					if firstConfig.Shards[i] == kv.gid {
+						kv.curShards[i] = true
+					}
+				}
+				kv.checkConfig = true // snapshot 保存，防止 shards 重复分配
+			}
+			requiredShards := make([]bool, kv.NShards)
+			for i := range config.Shards {
+				if config.Shards[i] == kv.gid {
+					requiredShards[i] = true
+				}
+				kv.requiredShards = requiredShards
+				kv.config = config
+			}
+		}
+		for i := range kv.curShards {
+			// 检查 group 不需要的 shards，执行 MOVESHARD
+			if kv.curShards[i] && !kv.requiredShards[i] {
+				_, _, ok := kv.rf.Start(Op{
+					Type:        MOVESHARD,
+					Config:      kv.config.Num,
+					Servers:     kv.config.Groups[kv.config.Shards[i]],
+					Shard:       i,
+					ClientId:    int64(kv.gid),
+					SequenceNum: int64(kv.config.Num),
+				})
+				if ok {
+					DPrintf(false, "[group: %d]-[server: %d] Start MoveShard", kv.gid, kv.me)
+				}
+			}
+		}
+		kv.mu.Unlock()
+		time.Sleep(50 * time.Millisecond)
+	}
+}
 
 func (kv *ShardKV) receiveMsg() {}
 
@@ -228,7 +277,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
-	labgob.Register(SnapshotData{})
+	// labgob.Register(SnapshotData{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -270,7 +319,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		kv.serverSequenceNums = snapshotData.ServerSequenceNums
 		kv.curShards = snapshotData.CurShards
 		kv.tasks = snapshotData.Tasks
-		kv.initialize = snapshotData.Initialize
+		kv.checkConfig = snapshotData.Initialize
 		kv.mu.Unlock()
 	}
 
