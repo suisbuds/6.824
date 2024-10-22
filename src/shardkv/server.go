@@ -88,7 +88,7 @@ type SnapshotData struct {
 	ServerSequenceNums []map[int64]int64
 	CurShards          []bool
 	Tasks              []mvShard
-	Initialize         bool
+	CheckConfig        bool
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
@@ -279,11 +279,33 @@ func (kv *ShardKV) updateConfig() {
 	}
 }
 
-func (kv *ShardKV) receiveMsg() {}
+// 抄Lab3
+func (kv *ShardKV) receiveMsg() {
+	for msg := range kv.applyCh {
+		if msg.CommandValid {
+			kv.mu.Lock()
+			op := msg.Command.(Op)
+			kv.doOperation(op)
+			kv.applyIndex = msg.CommandIndex
+			kv.mu.Unlock()
+		} else if msg.SnapshotValid {
+			var snapshotData SnapshotData
+			r := bytes.NewBuffer(msg.Snapshot)
+			d := labgob.NewDecoder(r)
+			if d.Decode(&snapshotData) == nil {
+				kv.mu.Lock()
+
+				kv.mu.Unlock()
+			}
+		}
+	}
+}
 
 func (kv *ShardKV) trySnapshot() {}
 
-// 轮询检查mvShard任务
+func (kv *ShardKV) doOperation(op Op) {}
+
+// 轮询检查 mvShard 任务
 func (kv *ShardKV) tryMoveShard() {
 	for {
 		kv.mu.Lock()
@@ -386,9 +408,35 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		kv.serverSequenceNums[i] = make(map[int64]int64)
 	}
 
+	// // 读取快照，服务器运行状态的字段都要保存
+	// var snapshotData SnapshotData
+	// snapshot := persister.ReadSnapshot()
+	// r := bytes.NewBuffer(snapshot)
+	// d := labgob.NewDecoder(r)
+	// if d.Decode(&snapshotData) == nil {
+	// 	kv.mu.Lock()
+	// 	kv.data = snapshotData.Data
+	// 	kv.clientSequenceNums = snapshotData.ClientSequenceNums
+	// 	kv.serverSequenceNums = snapshotData.ServerSequenceNums
+	// 	kv.curShards = snapshotData.CurShards
+	// 	kv.tasks = snapshotData.Tasks
+	// 	kv.checkConfig = snapshotData.CheckConfig
+	// 	kv.mu.Unlock()
+	// }
+	snapshot := persister.ReadSnapshot()
+	kv.readPersist(snapshot)
+
+	go kv.updateConfig() // 轮询更新config
+	go kv.receiveMsg()   // 接收Raft提交的Command
+	go kv.trySnapshot()
+	go kv.tryMoveShard() // shard转移
+
+	return kv
+}
+
+func (kv *ShardKV) readPersist(snapshot []byte) {
 	// 读取快照，服务器运行状态的字段都要保存
 	var snapshotData SnapshotData
-	snapshot := persister.ReadSnapshot()
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
 	if d.Decode(&snapshotData) == nil {
@@ -398,14 +446,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		kv.serverSequenceNums = snapshotData.ServerSequenceNums
 		kv.curShards = snapshotData.CurShards
 		kv.tasks = snapshotData.Tasks
-		kv.checkConfig = snapshotData.Initialize
+		kv.checkConfig = snapshotData.CheckConfig
 		kv.mu.Unlock()
 	}
-
-	go kv.updateConfig() // 轮询更新config
-	go kv.receiveMsg()   // 接收Raft提交的Command
-	go kv.trySnapshot()
-	go kv.tryMoveShard() // shard转移
-
-	return kv
 }
