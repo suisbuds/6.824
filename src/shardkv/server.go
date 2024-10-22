@@ -26,7 +26,7 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	mck                *shardctrler.Clerk
+	sm                *shardctrler.Clerk
 	config             shardctrler.Config
 	data               []map[string]string // key/value
 	clientSequenceNums []map[int64]int64
@@ -34,14 +34,14 @@ type ShardKV struct {
 
 	curShards          []bool            // kv server's current shards
 	requiredShards     []bool            // kv server's required shards
-	tasks              []mvShardTask     // shards 转移任务
+	tasks              []mvShard     // shards 转移任务
 	serverSequenceNums []map[int64]int64 // 记录shards转移操作
 
 	NShards    int
 	initialize bool // 将分片分配至group时，记录server是否观察到config的初始化
 }
 
-type mvShardTask struct {
+type mvShard struct {
 }
 
 type SnapshotData struct {
@@ -49,7 +49,7 @@ type SnapshotData struct {
 	clientSequenceNums []map[int64]int64
 	serverSequenceNums []map[int64]int64
 	curShards          []bool
-	tasks              []mvShardTask
+	tasks              []mvShard
 	initialize         bool
 }
 
@@ -61,6 +61,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 }
 
+
 // the tester calls Kill() when a ShardKV instance won't
 // be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
@@ -69,6 +70,14 @@ func (kv *ShardKV) Kill() {
 	kv.rf.Kill()
 	// Your code here, if desired.
 }
+
+func (kv *ShardKV) updateConfig(){}
+
+func (kv *ShardKV) receiveMsg(){}
+
+func (kv *ShardKV) trySnapshot(){}
+
+func (kv *ShardKV) moveShard(){}
 
 // servers[] contains the ports of the servers in this group.
 //
@@ -112,7 +121,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// Use something like this to talk to the shardctrler:
 	// kv.mck = shardctrler.MakeClerk(kv.ctrlers)
 
-	kv.mck = shardctrler.MakeClerk(ctrlers)
+	kv.sm = shardctrler.MakeClerk(ctrlers)
 	kv.NShards = len(kv.config.Shards)
 
 	kv.applyCh = make(chan raft.ApplyMsg)
@@ -144,6 +153,11 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		kv.initialize = snapshotData.initialize
 		kv.mu.Unlock()
 	}
+
+	go kv.updateConfig() // 轮询更新config
+	go kv.receiveMsg()   // 接收Raft提交的Command
+	go kv.trySnapshot() 
+	go kv.moveShard() // shard转移
 
 	return kv
 }
