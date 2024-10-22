@@ -303,8 +303,6 @@ func (kv *ShardKV) trySnapshot() {
 	}
 }
 
-func (kv *ShardKV) doOperation(op Op) {}
-
 // 轮询检查 mvShard 任务
 func (kv *ShardKV) tryMoveShard() {
 	for {
@@ -322,7 +320,7 @@ func (kv *ShardKV) tryMoveShard() {
 	}
 }
 
-// Call PutShard RPC
+// MoveShard Call PutShard RPC
 func (kv *ShardKV) moveShard(task MvShard) {
 	args := PutShardArgs{}
 	args.Shard = task.Shard
@@ -381,6 +379,75 @@ func (kv *ShardKV) snapshot() {
 	applyIndex := kv.applyIndex
 	data := w.Bytes()
 	kv.rf.Snapshot(applyIndex, data)
+}
+
+func (kv *ShardKV) doOperation(op Op) {
+	switch op.Type {
+	case GET:
+		return
+	case PUT:
+		kv.doPutAppend(op)
+	case APPEND:
+		kv.doPutAppend(op)
+	case PUTSHARD:
+		kv.doPutShard(op)
+	case MOVESHARD:
+		kv.doMoveShard(op)
+	}
+}
+
+func (kv *ShardKV) doPutAppend(op Op) {
+	if kv.serverSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum {
+		return
+	}
+	kv.serverSequenceNums[op.Shard][op.ClientId] = op.SequenceNum
+	if op.Type == PUT {
+		kv.data[op.Shard][op.Key] = op.Val
+	} else if op.Type == APPEND {
+		kv.data[op.Shard][op.Key] += op.Val
+	}
+}
+
+func (kv *ShardKV) doPutShard(op Op) {
+	if kv.serverSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum {
+		return
+	}
+	kv.serverSequenceNums[op.Shard][op.ClientId] = op.SequenceNum
+	kv.curShards[op.Shard] = true
+	kv.data[op.Shard] = map[string]string{}
+	kv.clientSequenceNums[op.Shard] = map[int64]int64{}
+	for k, v := range op.ShardData {
+		kv.data[op.Shard][k] = v
+	}
+	for k, v := range op.ShardSequence {
+		kv.clientSequenceNums[op.Shard][k] = v
+	}
+}
+
+func (kv *ShardKV) doMoveShard(op Op) {
+	if kv.serverSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum {
+		return
+	}
+	kv.serverSequenceNums[op.Shard][op.ClientId] = op.SequenceNum
+	kv.curShards[op.Shard] = false
+	task := MvShard{
+		Config:        op.Config,
+		Servers:       op.Servers,
+		Shard:         op.Shard,
+		ShardData:     make(map[string]string),
+		ShardSequence: make(map[int64]int64),
+		ShardBuffer:   make(map[int64]string),
+	}
+	for k, v := range kv.data[op.Shard] {
+		task.ShardData[k] = v
+	}
+	for k, v := range kv.clientSequenceNums[op.Shard] {
+		task.ShardSequence[k] = v
+	}
+	kv.data[op.Shard] = map[string]string{}
+	kv.clientSequenceNums[op.Shard] = map[int64]int64{}
+	kv.tasks = append(kv.tasks, task)
+
 }
 
 // servers[] contains the ports of the servers in this group.
