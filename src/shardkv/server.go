@@ -289,14 +289,7 @@ func (kv *ShardKV) receiveMsg() {
 			kv.applyIndex = msg.CommandIndex
 			kv.mu.Unlock()
 		} else if msg.SnapshotValid {
-			var snapshotData SnapshotData
-			r := bytes.NewBuffer(msg.Snapshot)
-			d := labgob.NewDecoder(r)
-			if d.Decode(&snapshotData) == nil {
-				kv.mu.Lock()
-
-				kv.mu.Unlock()
-			}
+			kv.readPersist(msg.Snapshot)
 		}
 	}
 }
