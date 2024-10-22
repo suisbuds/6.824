@@ -66,14 +66,14 @@ type ShardKV struct {
 
 	curShards          []bool            // kv server 当前持有的 shards
 	requiredShards     []bool            // kv server's 需要的 shards
-	tasks              []mvShard         // shards 转移任务
+	tasks              []MvShard         // shards 转移任务
 	serverSequenceNums []map[int64]int64 // 记录shards转移操作
 
 	NShards     int
 	checkConfig bool // 当 shards 再分配时，记录server是否观察到config的变化
 }
 
-type mvShard struct {
+type MvShard struct {
 	Config        int
 	Servers       []string
 	Shard         int
@@ -87,7 +87,7 @@ type SnapshotData struct {
 	ClientSequenceNums []map[int64]int64
 	ServerSequenceNums []map[int64]int64
 	CurShards          []bool
-	Tasks              []mvShard
+	Tasks              []MvShard
 	CheckConfig        bool
 }
 
@@ -294,7 +294,14 @@ func (kv *ShardKV) receiveMsg() {
 	}
 }
 
-func (kv *ShardKV) trySnapshot() {}
+func (kv *ShardKV) trySnapshot() {
+	for {
+		if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
+			kv.snapshot()
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
 
 func (kv *ShardKV) doOperation(op Op) {}
 
@@ -305,7 +312,7 @@ func (kv *ShardKV) tryMoveShard() {
 		if len(kv.tasks) != 0 {
 			task := kv.tasks[0]
 			// kv.tasks = append(kv.tasks[:0], kv.tasks[1:]...)
-			newTasks := make([]mvShard, len(kv.tasks)-1)
+			newTasks := make([]MvShard, len(kv.tasks)-1)
 			copy(newTasks, kv.tasks[1:])
 			kv.tasks = newTasks
 			kv.moveShard(task)
@@ -316,7 +323,7 @@ func (kv *ShardKV) tryMoveShard() {
 }
 
 // Call PutShard RPC
-func (kv *ShardKV) moveShard(task mvShard) {
+func (kv *ShardKV) moveShard(task MvShard) {
 	args := PutShardArgs{}
 	args.Shard = task.Shard
 	args.Data = task.ShardData
@@ -339,6 +346,41 @@ func (kv *ShardKV) moveShard(task mvShard) {
 			}
 		}
 	}
+}
+
+func (kv *ShardKV) readPersist(snapshot []byte) {
+	// 读取快照，服务器运行状态的字段都要保存
+	var snapshotData SnapshotData
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	if d.Decode(&snapshotData) == nil {
+		kv.mu.Lock()
+		kv.data = snapshotData.Data
+		kv.clientSequenceNums = snapshotData.ClientSequenceNums
+		kv.serverSequenceNums = snapshotData.ServerSequenceNums
+		kv.curShards = snapshotData.CurShards
+		kv.tasks = snapshotData.Tasks
+		kv.checkConfig = snapshotData.CheckConfig
+		kv.mu.Unlock()
+	}
+}
+
+func (kv *ShardKV) snapshot() {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(SnapshotData{
+		Data:               kv.data,
+		ClientSequenceNums: kv.clientSequenceNums,
+		ServerSequenceNums: kv.serverSequenceNums,
+		CurShards:          kv.curShards,
+		Tasks:              kv.tasks,
+		CheckConfig:        kv.checkConfig,
+	})
+	applyIndex := kv.applyIndex
+	data := w.Bytes()
+	kv.rf.Snapshot(applyIndex, data)
 }
 
 // servers[] contains the ports of the servers in this group.
@@ -371,7 +413,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
-	// labgob.Register(SnapshotData{})
+	// 需要labgob编解码自定义类型时，需要注册
+	labgob.Register(SnapshotData{})
+	labgob.Register(MvShard{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -425,21 +469,4 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.tryMoveShard() // shard转移
 
 	return kv
-}
-
-func (kv *ShardKV) readPersist(snapshot []byte) {
-	// 读取快照，服务器运行状态的字段都要保存
-	var snapshotData SnapshotData
-	r := bytes.NewBuffer(snapshot)
-	d := labgob.NewDecoder(r)
-	if d.Decode(&snapshotData) == nil {
-		kv.mu.Lock()
-		kv.data = snapshotData.Data
-		kv.clientSequenceNums = snapshotData.ClientSequenceNums
-		kv.serverSequenceNums = snapshotData.ServerSequenceNums
-		kv.curShards = snapshotData.CurShards
-		kv.tasks = snapshotData.Tasks
-		kv.checkConfig = snapshotData.CheckConfig
-		kv.mu.Unlock()
-	}
 }
