@@ -74,6 +74,12 @@ type ShardKV struct {
 }
 
 type mvShard struct {
+	Config        int
+	Servers       []string
+	Shard         int
+	ShardData     map[string]string
+	ShardSequence map[int64]int64
+	ShardBuffer   map[int64]string
 }
 
 type SnapshotData struct {
@@ -190,7 +196,6 @@ func (kv *ShardKV) Kill() {
 	// Your code here, if desired.
 }
 
-
 func (kv *ShardKV) updateConfig() {
 	for {
 		kv.mu.Lock()
@@ -221,7 +226,7 @@ func (kv *ShardKV) updateConfig() {
 			}
 		}
 		for i := range kv.curShards {
-			// 检查 group 不需要的 shards，执行 MOVESHARD
+			// 检查 group 不需要的 shards，执行 MOVESHARD, 并在 Raft 集群达成一致
 			if kv.curShards[i] && !kv.requiredShards[i] {
 				_, _, ok := kv.rf.Start(Op{
 					Type:        MOVESHARD,
@@ -245,7 +250,25 @@ func (kv *ShardKV) receiveMsg() {}
 
 func (kv *ShardKV) trySnapshot() {}
 
-func (kv *ShardKV) moveShard() {}
+func (kv *ShardKV) tryMoveShard() {
+	for {
+		kv.mu.Lock()
+		if len(kv.tasks) != 0 {
+			task := kv.tasks[0]
+			// kv.tasks = append(kv.tasks[:0], kv.tasks[1:]...)
+			newTasks := make([]mvShard, len(kv.tasks)-1)
+			copy(newTasks, kv.tasks[1:])
+			kv.tasks = newTasks
+			kv.moveShard(task)
+		}
+		kv.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func (kv *ShardKV) moveShard(task mvShard) {
+
+}
 
 // servers[] contains the ports of the servers in this group.
 //
@@ -326,7 +349,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.updateConfig() // 轮询更新config
 	go kv.receiveMsg()   // 接收Raft提交的Command
 	go kv.trySnapshot()
-	go kv.moveShard() // shard转移
+	go kv.tryMoveShard() // shard转移
 
 	return kv
 }
