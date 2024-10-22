@@ -2,6 +2,7 @@ package shardkv
 
 import (
 	"bytes"
+	"log"
 	"sync"
 
 	"6.824/labgob"
@@ -10,10 +11,39 @@ import (
 	"6.824/shardctrler"
 )
 
+const (
+	Debug     = false
+	GET       = 0
+	PUT       = 1
+	APPEND    = 2
+	PUTSHARD  = 3
+	MOVESHARD = 4
+)
+
+func DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
+	if Debug && debug {
+		log.Printf(format, a...)
+	}
+	return
+}
+
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Type   int
+	Key    string
+	Val    string
+	Config int
+
+	Shard         int
+	ShardData     map[string]string
+	ShardSequence map[int64]int64
+	ShardBuffer   map[int64]string
+
+	Servers     []string
+	ClientId    int64
+	SequenceNum int64
 }
 
 type ShardKV struct {
@@ -26,7 +56,7 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	sm                *shardctrler.Clerk
+	sm                 *shardctrler.Clerk
 	config             shardctrler.Config
 	data               []map[string]string // key/value
 	clientSequenceNums []map[int64]int64
@@ -34,7 +64,7 @@ type ShardKV struct {
 
 	curShards          []bool            // kv server's current shards
 	requiredShards     []bool            // kv server's required shards
-	tasks              []mvShard     // shards 转移任务
+	tasks              []mvShard         // shards 转移任务
 	serverSequenceNums []map[int64]int64 // 记录shards转移操作
 
 	NShards    int
@@ -61,7 +91,6 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 }
 
-
 // the tester calls Kill() when a ShardKV instance won't
 // be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
@@ -71,13 +100,13 @@ func (kv *ShardKV) Kill() {
 	// Your code here, if desired.
 }
 
-func (kv *ShardKV) updateConfig(){}
+func (kv *ShardKV) updateConfig() {}
 
-func (kv *ShardKV) receiveMsg(){}
+func (kv *ShardKV) receiveMsg() {}
 
-func (kv *ShardKV) trySnapshot(){}
+func (kv *ShardKV) trySnapshot() {}
 
-func (kv *ShardKV) moveShard(){}
+func (kv *ShardKV) moveShard() {}
 
 // servers[] contains the ports of the servers in this group.
 //
@@ -156,7 +185,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	go kv.updateConfig() // 轮询更新config
 	go kv.receiveMsg()   // 接收Raft提交的Command
-	go kv.trySnapshot() 
+	go kv.trySnapshot()
 	go kv.moveShard() // shard转移
 
 	return kv
