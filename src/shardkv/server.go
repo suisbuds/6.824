@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	Debug     = false
+	Debug     = true
 	GET       = 0
 	PUT       = 1
 	APPEND    = 2
@@ -61,13 +61,13 @@ type ShardKV struct {
 	sm                 *shardctrler.Clerk
 	config             shardctrler.Config
 	data               []map[string]string // key/value
-	clientSequenceNums []map[int64]int64
+	clientSequenceNums []map[int64]int64 // 记录 client 完成的操作
 	applyIndex         int
 
 	curShards          []bool            // kv server 当前持有的 shards
 	requiredShards     []bool            // kv server's 需要的 shards
 	tasks              []MvShard         // shards 转移任务
-	serverSequenceNums []map[int64]int64 // 记录shards转移操作
+	serverSequenceNums []map[int64]int64 // 记录 server 完成的 shards 转移操作
 
 	NShards     int
 	checkConfig bool // 当 shards 再分配时，记录server是否观察到config的变化
@@ -94,7 +94,7 @@ type SnapshotData struct {
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	kv.mu.Lock()
-	// 确认shard是否在group的管理内
+	// 确认 shard 是否在 group 的管理内
 	if kv.config.Shards[args.Shard] != kv.gid || !kv.curShards[args.Shard] {
 		reply.Err = ErrWrongGroup
 		kv.mu.Unlock()
@@ -138,7 +138,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	kv.mu.Lock()
-	// 确认shard是否在group的管理内
+	// 确认 shard 是否在 group 的管理内
 	if kv.config.Shards[args.Shard] != kv.gid || !kv.curShards[args.Shard] {
 		reply.Err = ErrWrongGroup
 		kv.mu.Unlock()
@@ -344,7 +344,6 @@ func (kv *ShardKV) moveShard(task MvShard) {
 			var reply PutShardReply
 			ok := srv.Call("ShardKV.PutShard", &args, &reply)
 			if ok && reply.Done {
-				// kv.mu.Lock()
 				return
 			}
 		}
@@ -353,40 +352,17 @@ func (kv *ShardKV) moveShard(task MvShard) {
 
 func (kv *ShardKV) readPersist(snapshot []byte) {
 	// 读取快照，服务器运行状态的字段都要保存
-	// var snapshotData SnapshotData
-	// r := bytes.NewBuffer(snapshot)
-	// d := labgob.NewDecoder(r)
-	// if d.Decode(&snapshotData) == nil {
-	// 	kv.mu.Lock()
-	// 	kv.data = snapshotData.Data
-	// 	kv.clientSequenceNums = snapshotData.ClientSequenceNums
-	// 	kv.serverSequenceNums = snapshotData.ServerSequenceNums
-	// 	kv.curShards = snapshotData.CurShards
-	// 	kv.tasks = snapshotData.Tasks
-	// 	kv.checkConfig = snapshotData.CheckConfig
-	// 	kv.mu.Unlock()
-	// }
-	var data []map[string]string
-	var clientSequenceNums []map[int64]int64
-	var serverSequenceNums []map[int64]int64
-	var curShards []bool
-	var checkConfig bool
-	var tasks []MvShard
+	var snapshotData SnapshotData
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
-	if d.Decode(&data) == nil &&
-		d.Decode(&clientSequenceNums) == nil &&
-		d.Decode(&serverSequenceNums) == nil &&
-		d.Decode(&curShards) == nil &&
-		d.Decode(&tasks) == nil &&
-		d.Decode(&checkConfig) == nil {
+	if d.Decode(&snapshotData) == nil {
 		kv.mu.Lock()
-		kv.data = data
-		kv.clientSequenceNums = clientSequenceNums
-		kv.serverSequenceNums = serverSequenceNums
-		kv.curShards = curShards
-		kv.tasks = tasks
-		kv.checkConfig = checkConfig
+		kv.data = snapshotData.Data
+		kv.clientSequenceNums = snapshotData.ClientSequenceNums
+		kv.serverSequenceNums = snapshotData.ServerSequenceNums
+		kv.curShards = snapshotData.CurShards
+		kv.tasks = snapshotData.Tasks
+		kv.checkConfig = snapshotData.CheckConfig
 		kv.mu.Unlock()
 	}
 }
@@ -395,20 +371,16 @@ func (kv *ShardKV) snapshot() {
 	kv.mu.Lock()
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	e.Encode(kv.data)
-	e.Encode(kv.clientSequenceNums)
-	e.Encode(kv.serverSequenceNums)
-	e.Encode(kv.curShards)
-	e.Encode(kv.tasks)
-	e.Encode(kv.checkConfig)
-	// e.Encode(SnapshotData{
-	// 	Data:               kv.data,
-	// 	ClientSequenceNums: kv.clientSequenceNums,
-	// 	ServerSequenceNums: kv.serverSequenceNums,
-	// 	CurShards:          kv.curShards,
-	// 	Tasks:              kv.tasks,
-	// 	CheckConfig:        kv.checkConfig,
-	// })
+
+	e.Encode(SnapshotData{
+		Data:               kv.data,
+		ClientSequenceNums: kv.clientSequenceNums,
+		ServerSequenceNums: kv.serverSequenceNums,
+		CurShards:          kv.curShards,
+		Tasks:              kv.tasks,
+		CheckConfig:        kv.checkConfig,
+	})
+
 	applyIndex := kv.applyIndex
 	data := w.Bytes()
 	kv.rf.Snapshot(applyIndex, data)
@@ -476,21 +448,15 @@ func (kv *ShardKV) doMoveShard(op Op) {
 	}
 	kv.serverSequenceNums[op.Shard][op.ClientId] = op.SequenceNum
 	kv.curShards[op.Shard] = false // shard 转移
-	var task MvShard
-	task.Config = op.Config
-	task.Servers = op.Servers
-	task.Shard = op.Shard
-	task.ShardData = make(map[string]string)
-	task.ShardSequence = make(map[int64]int64)
-	task.ShardBuffer = make(map[int64]string)
-	// task := MvShard{
-	// 	Config:        op.Config,
-	// 	Servers:       op.Servers,
-	// 	Shard:         op.Shard,
-	// 	ShardData:     make(map[string]string),
-	// 	ShardSequence: make(map[int64]int64),
-	// 	ShardBuffer:   make(map[int64]string),
-	// }
+
+	task := MvShard{
+		Config:        op.Config,
+		Servers:       op.Servers,
+		Shard:         op.Shard,
+		ShardData:     make(map[string]string),
+		ShardSequence: make(map[int64]int64),
+		ShardBuffer:   make(map[int64]string),
+	}
 	// copy shard 数据，然后清空
 	for k, v := range kv.data[op.Shard] {
 		task.ShardData[k] = v
@@ -534,8 +500,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 	// 需要labgob编解码自定义类型时，需要注册
-	// labgob.Register(SnapshotData{})
-	// labgob.Register(MvShard{})
+	// BUG:  MvShard 要比 SnapshotData 先注册
+	labgob.Register(MvShard{})
+	labgob.Register(SnapshotData{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -568,10 +535,10 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	snapshot := persister.ReadSnapshot()
 	kv.readPersist(snapshot)
 
-	go kv.updateConfig() // 轮询更新config
-	go kv.receiveMsg()   // 接收Raft提交的Command
+	go kv.updateConfig() // 轮询更新 config
+	go kv.receiveMsg()   // 接收Raft提交的 Command
 	go kv.trySnapshot()
-	go kv.tryMoveShard() // shard转移
+	go kv.tryMoveShard() // shard 转移
 
 	return kv
 }
