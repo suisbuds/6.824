@@ -232,10 +232,11 @@ func (kv *ShardKV) Kill() {
 func (kv *ShardKV) updateConfig() {
 	for {
 		kv.mu.Lock()
-		kv.rf.Start(Op{})
 
 		// server 定期从 sm 获取最新 config，发现 config 变化时更新本地 config 和 requiredShards
 		config := kv.sm.Query(-1)
+		kv.rf.Start(Op{})
+
 		if config.Num != kv.config.Num && config.Num != 0 {
 			// 检查 config 1's GID == group's GID
 			if !kv.checkConfig {
@@ -249,13 +250,14 @@ func (kv *ShardKV) updateConfig() {
 				kv.checkConfig = true // snapshot 保存，防止 shards 重复分配
 			}
 			requiredShards := make([]bool, kv.NShards)
-			for i := range config.Shards {
+			// BUG: 重复赋值
+			for i := range kv.config.Shards {
 				if config.Shards[i] == kv.gid {
 					requiredShards[i] = true
 				}
-				kv.requiredShards = requiredShards
-				kv.config = config
 			}
+			kv.requiredShards = requiredShards
+			kv.config = config
 		}
 		for i := range kv.curShards {
 			// 检查 group 不需要的 shards，执行 MOVESHARD, 并在 Raft 集群达成一致
