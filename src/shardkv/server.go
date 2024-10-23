@@ -419,6 +419,7 @@ func (kv *ShardKV) doPutAppend(op Op) {
 }
 
 func (kv *ShardKV) doPutShard(op Op) {
+	// serverSequenceNums 去重，ClientId 为 发送方 GID，SequenceNum 为 发送时的 ConfigNum
 	if kv.serverSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum {
 		return
 	}
@@ -426,6 +427,7 @@ func (kv *ShardKV) doPutShard(op Op) {
 	kv.curShards[op.Shard] = true
 	kv.data[op.Shard] = map[string]string{}
 	kv.clientSequenceNums[op.Shard] = map[int64]int64{}
+	// copy 避免新建引用
 	for k, v := range op.ShardData {
 		kv.data[op.Shard][k] = v
 	}
@@ -435,11 +437,12 @@ func (kv *ShardKV) doPutShard(op Op) {
 }
 
 func (kv *ShardKV) doMoveShard(op Op) {
-	if kv.serverSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum {
+	// ClientId 为 server GID，SequenceNum 为发送时 ConfigNum
+	if kv.serverSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum || !kv.curShards[op.Shard] {
 		return
 	}
 	kv.serverSequenceNums[op.Shard][op.ClientId] = op.SequenceNum
-	kv.curShards[op.Shard] = false
+	kv.curShards[op.Shard] = false // shard 转移
 	task := MvShard{
 		Config:        op.Config,
 		Servers:       op.Servers,
@@ -448,6 +451,7 @@ func (kv *ShardKV) doMoveShard(op Op) {
 		ShardSequence: make(map[int64]int64),
 		ShardBuffer:   make(map[int64]string),
 	}
+	// copy shard 数据，然后清空
 	for k, v := range kv.data[op.Shard] {
 		task.ShardData[k] = v
 	}
@@ -457,7 +461,6 @@ func (kv *ShardKV) doMoveShard(op Op) {
 	kv.data[op.Shard] = map[string]string{}
 	kv.clientSequenceNums[op.Shard] = map[int64]int64{}
 	kv.tasks = append(kv.tasks, task)
-
 }
 
 // servers[] contains the ports of the servers in this group.
