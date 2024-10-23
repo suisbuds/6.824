@@ -232,7 +232,6 @@ func (kv *ShardKV) Kill() {
 func (kv *ShardKV) updateConfig() {
 	for {
 		kv.mu.Lock()
-		// _, isLeader := kv.rf.GetState()
 		kv.rf.Start(Op{})
 
 		// server 定期从 sm 获取最新 config，发现 config 变化时更新本地 config 和 requiredShards
@@ -299,7 +298,7 @@ func (kv *ShardKV) trySnapshot() {
 		if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
 			kv.snapshot()
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(5*time.Millisecond)
 	}
 }
 
