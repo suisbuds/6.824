@@ -211,7 +211,8 @@ func (kv *ShardKV) PutShard(args *PutShardArgs, reply *PutShardReply) {
 			return
 		}
 		kv.mu.Lock()
-		if kv.clientSequenceNums[args.Shard][args.ClientId] >= args.SequenceNum {
+		// BUG: 用 serverSequenceNums 去重而不是 clientSequenceNums
+		if kv.serverSequenceNums[args.Shard][args.ClientId] >= args.SequenceNum {
 			reply.Done = true
 			kv.mu.Unlock()
 			return
