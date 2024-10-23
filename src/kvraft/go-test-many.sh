@@ -53,11 +53,11 @@ fi
 test=""
 race=""
 if [ $# -gt 2 ]; then
-    if [ "$3" = "-race" ]; then
-        race="-race"
-    else
-        test="$3"
-    fi
+	if [ "$3" = "-race" ]; then
+		race="-race"
+	else
+		test="$3"
+	fi
 fi
 
 # Default to no race detection unless otherwise specified
@@ -70,7 +70,6 @@ fi
 label="$test"
 prefix=0
 
-# 路径变量
 SCRIPT_DIR=$(dirname "$(realpath "$0")")
 OUTPUT_DIR="$SCRIPT_DIR/../../output"
 
@@ -109,14 +108,10 @@ finish() {
 				"$(pwd)\n$(grep FAIL: -- $OUTPUT_DIR/*.log | sed -e 's/.*FAIL: / - /' -e 's/ (.*)//' | sort -u)"
 		fi
 		((failed += 1))
+		printf "\e[1;31m"
 	else
 		((success += 1))
-	fi
-
-	if [ "$failed" -eq 0 ]; then
-		printf "\e[1;32m" # green
-	else
-		printf "\e[1;31m" # red
+		printf "\e[1;32m" 
 	fi
 
 	printf "Done %03d/%d; %d ok, %d failed%s\n\e[0m" \

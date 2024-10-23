@@ -35,9 +35,9 @@ type KVServer struct {
 
 	// Your definitions here.
 	// persistent data
-	data            map[string]string // record key-value pairs
+	data               map[string]string // record key-value pairs
 	clientSequenceNums map[int64]int64   // record the max sequence number of each client, avoid duplicate operation
-	applyIndex      int               // client apply max command index, to compact log
+	applyIndex         int               // client apply max command index, to compact log
 
 }
 
@@ -47,7 +47,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrServerDead
 		return
 	}
-	// 将客户端发送的操作以Command形式发送给Raft
+	// 将客户端的操作以Command形式发送给Raft
 	op := Op{
 		OperationType: GET,
 		Key:           args.Key,
@@ -63,7 +63,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	var timeout int32
 	atomic.StoreInt32(&timeout, 0)
 	go func() {
-		time.Sleep(1000* time.Millisecond)
+		time.Sleep(1000 * time.Millisecond)
 		atomic.StoreInt32(&timeout, 1)
 	}()
 
@@ -117,7 +117,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	var timeout int32
 	atomic.StoreInt32(&timeout, 0)
 	go func() {
-		time.Sleep(1000* time.Millisecond)
+		time.Sleep(1000 * time.Millisecond)
 		atomic.StoreInt32(&timeout, 1)
 	}()
 
@@ -159,18 +159,12 @@ func (kv *KVServer) receiveMsg() {
 	for !kv.killed() {
 		msg := <-kv.applyCh
 		if msg.CommandValid {
-			// log Command
 			kv.mu.Lock()
 			op := msg.Command.(Op) // type assertion
 			kv.applyIndex = msg.CommandIndex
 			kv.doOperation(op)
 			kv.mu.Unlock()
-			// NOTE:修改这里
-			// if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
-			// 	kv.snapshot()
-			// }
 		} else if msg.SnapshotValid {
-			// Snapshot command
 
 			var data map[string]string
 			var clientSequenceNums map[int64]int64
@@ -185,25 +179,19 @@ func (kv *KVServer) receiveMsg() {
 				kv.applyIndex = msg.SnapshotIndex
 				kv.mu.Unlock()
 			}
-			// NOTE:修改这里
-			// if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
-			// 	kv.snapshot()
-			// }
 		}
 	}
 }
 
 // check raft's logs current size periodically, and compact logs if hit the threshold
-// BUG: 平衡trySnapshot的频率，必须让goroutine休眠，否则会一直占用资源
 func (kv *KVServer) trySnapshot() {
-
 	for !kv.killed() {
 		// 如果raft日志长度大于阀值，利用snapshot压缩日志
-		// NOTE:修改这里
 		if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
 			kv.snapshot()
 		}
-		time.Sleep(time.Millisecond)
+		// BUG:必须让goroutine休眠，平衡snapshot频率，否则会过度占用资源 / log compaction过多
+		time.Sleep(3 * time.Millisecond)
 	}
 }
 
@@ -213,7 +201,6 @@ func (kv *KVServer) doOperation(op Op) {
 	if kv.clientSequenceNums[op.ClientId] >= op.SequenceNum {
 		return
 	}
-	// 更新操作序号并执行操作
 	kv.clientSequenceNums[op.ClientId] = op.SequenceNum
 	switch op.OperationType {
 	case GET:
@@ -236,10 +223,25 @@ func (kv *KVServer) snapshot() {
 	e.Encode(kv.applyIndex)
 
 	applyIndex := kv.applyIndex // 当前已运行的最大操作序号
-	snapshot := w.Bytes()       // sever run state
+	snapshot := w.Bytes()       
 	kv.rf.Snapshot(applyIndex, snapshot)
 }
 
+func (kv *KVServer) readPersist(persister *raft.Persister) {
+	var data map[string]string
+	var clientSequenceNums map[int64]int64
+	var applyIndex int
+	snapshot := persister.ReadSnapshot()
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	if d.Decode(&data) == nil && d.Decode(&clientSequenceNums) == nil && d.Decode(&applyIndex) == nil {
+		kv.mu.Lock()
+		kv.data = data
+		kv.clientSequenceNums = clientSequenceNums
+		kv.applyIndex = applyIndex
+		kv.mu.Unlock()
+	}
+}
 
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
@@ -271,25 +273,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.clientSequenceNums = map[int64]int64{}
 
 	// You may need initialization code here.
+	kv.readPersist(persister)
 
-	var data map[string]string
-	var clientSequenceNums map[int64]int64
-	var applyIndex int
-	snapshot := persister.ReadSnapshot()
-	r := bytes.NewBuffer(snapshot)
-	d := labgob.NewDecoder(r)
-	// Don't find error, restore server state
-	if d.Decode(&data) == nil && d.Decode(&clientSequenceNums) == nil && d.Decode(&applyIndex) == nil {
-		kv.mu.Lock()
-		kv.data = data
-		kv.clientSequenceNums = clientSequenceNums
-		kv.applyIndex = applyIndex
-		kv.mu.Unlock()
-	}
 
 	// keep running goroutine for receiving Msg and trying Snapshot
 	go kv.receiveMsg()
 	go kv.trySnapshot()
 	return kv
 }
-

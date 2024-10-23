@@ -1,4 +1,6 @@
 
+**Can't guranatee Bug-Free, some errors can't reproduce stablely**
+
 - [x] Lab 1: MapReduce
   - [ ] Challenge 1: Implement MapReduce Application
   - [ ] Challenge 2: MapReduce Coordinator and Workers Run On Separate Machines

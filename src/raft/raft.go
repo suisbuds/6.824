@@ -412,6 +412,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	for index, entry := range args.Entries {
 		// 日志不重合
+		// BUG:越界
 		if rf.GetLastLogEntry().Index < entry.Index || rf.GetLogEntry(entry.Index).Term != entry.Term {
 			var log []LogEntry
 			for i := rf.LastIncludedIndex + 1; i < entry.Index; i++ {
@@ -956,7 +957,7 @@ func (rf *Raft) sendEntries(server int) {
 					newNextIndex--
 				}
 				// Case 2
-				// BUG:越界问题
+				// BUG:越界
 				if rf.GetLogEntry(newNextIndex).Term == reply.XTerm {
 					// 防止回退到snapshot之前的日志
 					rf.NextIndex[server] = Max(newNextIndex, rf.LastIncludedIndex+1)
