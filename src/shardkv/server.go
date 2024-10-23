@@ -284,8 +284,8 @@ func (kv *ShardKV) updateConfig() {
 func (kv *ShardKV) receiveMsg() {
 	for msg := range kv.applyCh {
 		if msg.CommandValid {
-			kv.mu.Lock()
 			op := msg.Command.(Op)
+			kv.mu.Lock()
 			kv.doOperation(op)
 			kv.applyIndex = msg.CommandIndex
 			kv.mu.Unlock()
@@ -300,7 +300,7 @@ func (kv *ShardKV) trySnapshot() {
 		if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate*8/10 {
 			kv.snapshot()
 		}
-		time.Sleep(5*time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -395,6 +395,13 @@ func (kv *ShardKV) doOperation(op Op) {
 	case MOVESHARD:
 		kv.doMoveShard(op)
 	}
+}
+
+func (kv *ShardKV) doGet(op Op) {
+	if kv.clientSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum || !kv.curShards[op.Shard] {
+		return
+	}
+	kv.clientSequenceNums[op.Shard][op.ClientId] = op.SequenceNum
 }
 
 func (kv *ShardKV) doPutAppend(op Op) {
@@ -513,22 +520,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		kv.serverSequenceNums[i] = make(map[int64]int64)
 	}
 
-	
-	// // 读取快照，服务器运行状态的字段都要保存
-	// var snapshotData SnapshotData
-	// snapshot := persister.ReadSnapshot()
-	// r := bytes.NewBuffer(snapshot)
-	// d := labgob.NewDecoder(r)
-	// if d.Decode(&snapshotData) == nil {
-	// 	kv.mu.Lock()
-	// 	kv.data = snapshotData.Data
-	// 	kv.clientSequenceNums = snapshotData.ClientSequenceNums
-	// 	kv.serverSequenceNums = snapshotData.ServerSequenceNums
-	// 	kv.curShards = snapshotData.CurShards
-	// 	kv.tasks = snapshotData.Tasks
-	// 	kv.checkConfig = snapshotData.CheckConfig
-	// 	kv.mu.Unlock()
-	// }
 	snapshot := persister.ReadSnapshot()
 	kv.readPersist(snapshot)
 
