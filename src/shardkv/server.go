@@ -385,7 +385,7 @@ func (kv *ShardKV) snapshot() {
 func (kv *ShardKV) doOperation(op Op) {
 	switch op.Type {
 	case GET:
-		return
+		kv.doGet(op)
 	case PUT:
 		kv.doPutAppend(op)
 	case APPEND:
@@ -398,6 +398,7 @@ func (kv *ShardKV) doOperation(op Op) {
 }
 
 func (kv *ShardKV) doGet(op Op) {
+	// clientSequenceNums 去重 + sever 是否拥有对应的 shard
 	if kv.clientSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum || !kv.curShards[op.Shard] {
 		return
 	}
@@ -405,10 +406,11 @@ func (kv *ShardKV) doGet(op Op) {
 }
 
 func (kv *ShardKV) doPutAppend(op Op) {
-	if kv.serverSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum {
+	if kv.clientSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum || !kv.curShards[op.Shard] {
 		return
 	}
-	kv.serverSequenceNums[op.Shard][op.ClientId] = op.SequenceNum
+	// clientSequenceNums 和 data 要按 shard 分组，便于 MvShard
+	kv.clientSequenceNums[op.Shard][op.ClientId] = op.SequenceNum
 	if op.Type == PUT {
 		kv.data[op.Shard][op.Key] = op.Val
 	} else if op.Type == APPEND {
