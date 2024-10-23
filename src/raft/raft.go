@@ -138,9 +138,7 @@ func (rf *Raft) persist() {
 	e.Encode(rf.LastIncludedIndex)
 	e.Encode(rf.LastIncludedTerm)
 	raftstate := w.Bytes()
-	//NOTE: 不会检查snapshot大小
 	rf.persister.SaveRaftState(raftstate)
-	rf.DPrintf(false, "persist() raftstate size = %d", len(raftstate))
 }
 
 // restore previously persisted state.
@@ -185,7 +183,6 @@ func (rf *Raft) readPersist(raftstate []byte) {
 	}
 
 	if !validateDefaultVaule() {
-		// panic("ReadPersist(): Decode Error because of indefault value")
 		return
 	} else {
 		rf.CurrentTerm = currentTerm
@@ -194,7 +191,6 @@ func (rf *Raft) readPersist(raftstate []byte) {
 		rf.LastIncludedIndex = lastIncludedIndex
 		rf.LastIncludedTerm = lastIncludedTerm
 	}
-	rf.DPrintf(false, "rf-[%d] call readPersist(), CurrentTerm = %d, VotedFor = %d, LogLength = %d, LastIncludedIndex = %d, LastIncludedTerm = %d", rf.me, rf.CurrentTerm, rf.VotedFor, len(rf.Log), lastIncludedIndex, lastIncludedTerm)
 }
 
 func (rf *Raft) persistSnapshot(snapshot []byte) {
@@ -207,7 +203,6 @@ func (rf *Raft) persistSnapshot(snapshot []byte) {
 	e.Encode(rf.LastIncludedTerm)
 	raftstate := w.Bytes()
 	rf.persister.SaveStateAndSnapshot(raftstate, snapshot)
-	rf.DPrintf(false, "persistSnapshot() raftstate size = %d", len(raftstate))
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -216,11 +211,6 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 	// Your code here (2D).
 	// Not need to implement
-	// NOTE:修改这里
-	// 忘加锁了
-	// if lastIncludedIndex <= rf.CommitIndex {
-	// 	return false
-	// }
 	return true
 }
 
@@ -228,7 +218,6 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
-// HACK: 日志压缩不够
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	// delete log entries whose index <= arg's index
@@ -239,14 +228,14 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		return
 	}
 	// 2. log compaction
-	rf.DPrintf(false, "rf-[%d] Call Snapshot(), index = %d", rf.me, index)
 	var log []LogEntry
-	// BUG:check the boundary , it may lead to index out of range😄
+	// BUG:越界
 	for i := index + 1; i <= rf.GetLastLogEntry().Index; i++ {
 		log = append(log, rf.GetLogEntry(i))
 	}
-	rf.LastIncludedTerm = rf.GetLogEntry(index).Term // 要在替换日志前操作，否则会越界
-	rf.LastIncludedIndex = index                     // update lastIncludedIndex
+	// BUG:要在替换日志前操作，否则会越界
+	rf.LastIncludedTerm = rf.GetLogEntry(index).Term
+	rf.LastIncludedIndex = index // update lastIncludedIndex
 	rf.Log = log
 
 	// 3. persist current state and snapshot, raftstate is lab2, snapshot is lab3
@@ -292,7 +281,6 @@ type AppendEntriesReply struct {
 
 }
 
-// NOTE: snapshot RPC, raftstate's parameters, not snapshots
 type InstallSnapshotArgs struct {
 	Term              int
 	LeaderId          int
@@ -308,17 +296,11 @@ type InstallSnapshotReply struct {
 
 // example RequestVote RPC handler.
 // Invoked by candidates to gather votes
-/*
-* 1. Reply false if term < currentTerm
-* 2. If votedFor is null or candidateId, and candidate’s log is at
-* least as up-to-date as receiver’s log, grant vote
- */
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	rf.DPrintf(false, "rf-[%d] Get RequestVote from rf-[%d]", rf.me, args.CandidateId)
 	reply.Term = rf.CurrentTerm
 	lastIndex := rf.GetLastLogEntry().Index
 	lastTerm := rf.GetLastLogEntry().Term
@@ -349,7 +331,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// 投票成功，重置选举超时，防止不符合的candidate阻塞潜在leader
 		rf.persist()
 		rf.ElectionTimeout = GetElectionTimeout()
-		rf.DPrintf(false, "rf-[%d] Role = %d, VoteFor = %d, Term = %d", rf.me, rf.Role, args.CandidateId, rf.CurrentTerm)
 	} else {
 		return
 	}
@@ -368,8 +349,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// 1: reset election timeout, prevent from election while having leader
-	rf.DPrintf(false, "rf-[%d], Role = %d, Get AppendEntries from leader-[%d], LastIncludeIndex = %d, CurrentTerm = %d, PrevLogIndex = %d, PrevLogTerm = %d, LeaderTerm = %d",
-		rf.me, rf.Role, args.LeaderId, rf.LastIncludedIndex, rf.CurrentTerm, args.PrevLogIndex, args.PrevLogTerm, args.Term)
 
 	reply.Term = rf.CurrentTerm
 	rf.ElectionTimeout = GetElectionTimeout()
@@ -402,7 +381,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			// 找到第一个不匹配的日志索引
 			reply.XIndex++
 		}
-		rf.DPrintf(false, "rf-[%d], Role = %d, AppendEntries fail because of inconsistency, XLen = %d, XTerm = %d, XIndex = %d", rf.me, rf.Role, reply.XLen, reply.XTerm, reply.XIndex)
 		return
 	}
 	// State 5: pass log consistency check, merge sender's log with local log
@@ -420,13 +398,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 			log = append(log, args.Entries[index:]...)
 			rf.Log = log
-			rf.DPrintf(false, "rf-[%d], Role = %d, Append new log = %v", rf.me, rf.Role, rf.Log)
 		}
 	}
 	// State 6: update commitIndex
 	if args.LeaderCommitIndex > rf.CommitIndex {
 		rf.CommitIndex = Min(args.LeaderCommitIndex, rf.GetLastLogEntry().Index)
-		rf.DPrintf(false, "rf-[%d] Role = %d, CommitIndex update to %d", rf.me, rf.Role, rf.CommitIndex)
 	}
 	rf.persist()
 	reply.Success = true
@@ -477,7 +453,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	// And use ApplyMsg to send snapshot to applyCh in order to apply snapshot in state machine
 	if args.LastIncludedIndex < lastLogEntry.Index && args.LastIncludedTerm == entry.Term {
 		var log []LogEntry
-		// NOTE:check the boundary 😄
+		// BUG:越界😄
 		for i := entry.Index + 1; i <= lastLogEntry.Index; i++ {
 			log = append(log, rf.GetLogEntry(i))
 		}
@@ -559,8 +535,8 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
-// Client向Raft Server发送命令command
 
+// Client向Raft Server发送命令command
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
 
@@ -580,8 +556,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.persist()
 	rf.mu.Unlock()
 
-	// Lab3: leader一开始要快速提交Client发送的Operation，以便通过速度测试
-	// NOTE:修改这里
+	// BUG: Lab3中Leader一开始要快速提交Client发送的Operation，以便通过速度测试
 	atomic.StoreInt32(&rf.quickCommitCheck, 20)
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
@@ -605,7 +580,6 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
-// 判断goroutines是否kill,需要lock
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
@@ -621,7 +595,7 @@ func (rf *Raft) ticker() {
 		// time.Sleep().
 		rf.updateLastApplied()
 		// role可能会被多个Goroutine读写访问，需要加锁
-		// NOTE: atomic.StoreInt32(&role,int32(rf.Role)) 仅能保证赋值操作是原子的，不能保证rf.Role的读取是原子的
+		// BUG: atomic.StoreInt32(&role,int32(rf.Role)) 仅能保证赋值操作是原子的，不能保证rf.Role的读取是原子的
 		rf.mu.Lock()
 		role := rf.Role
 		rf.mu.Unlock()
@@ -640,8 +614,6 @@ func (rf *Raft) ticker() {
 	}
 }
 
-
-
 /*
 * atomic operation, don't need to add lock
 * 1. Lab3：初始阶段快速提交
@@ -655,7 +627,7 @@ func (rf *Raft) doLeaderTask() {
 	if atomic.LoadInt32(&rf.quickCommitCheck) > 0 {
 		atomic.AddInt32(&rf.quickCommitCheck, -1)
 		rf.updateCommitIndex()
-		// NOTE:修改这里
+		// BUG:提交的日志过多
 		time.Sleep(3 * time.Millisecond) // 快速提交阶段，减少睡眠时间
 	} else {
 		// Lab2
@@ -667,11 +639,9 @@ func (rf *Raft) doLeaderTask() {
 
 func (rf *Raft) doFollowerTask() bool {
 	rf.mu.Lock()
-	rf.DPrintf(false, "rf-[%d] 's ElectionTimeout = %d", rf.me, rf.ElectionTimeout)
 	// 检查是否即将超时，electionTimeout<100ms
 	if rf.ElectionTimeout < rf.BroadcastTime {
 		rf.Role = CANDIDATE
-		rf.DPrintf(false, "rf-[%d] is ElectionTimeout, convert to CANDIDATE", rf.me)
 		rf.mu.Unlock()
 		// change to candidate, continue loop
 		return true
@@ -725,7 +695,6 @@ func (rf *Raft) doCandidateTask() {
 					LastLogTerm:  lastLogTerm,
 				}
 				reply := RequestVoteReply{}
-				rf.DPrintf(false, "rf-[%d] send RequestVote to server [%d]", rf.me, server)
 				if !rf.sendRequestVote(server, &args, &reply) {
 					// 发送失败，广播唤醒主线程
 					rf.cond.Broadcast()
@@ -780,7 +749,6 @@ func (rf *Raft) doCandidateTask() {
 			return
 		}
 		if votesGet > len(rf.peers)/2 {
-			rf.DPrintf(false, "rf-[%d] is voted as Leader, term = [%d]", rf.me, rf.CurrentTerm)
 			rf.Role = LEADER
 			// Reinitialize leader's log state
 			rf.CommitIndex = 0
@@ -794,7 +762,6 @@ func (rf *Raft) doCandidateTask() {
 		}
 		rf.mu.Unlock()
 	}
-	rf.DPrintf(false, "Candidate rf-[%d] finishes election", rf.me)
 }
 
 /*
@@ -849,7 +816,6 @@ func (rf *Raft) updateLastApplied() {
 		rf.applyCh <- msg
 		rf.mu.Lock()
 		rf.LastApplied++
-		rf.DPrintf(false, "[%d] apply msg [%d] success", rf.me, rf.LastApplied+1)
 	}
 	rf.mu.Unlock()
 }
@@ -858,7 +824,7 @@ func (rf *Raft) updateLastApplied() {
 // firstSendEntries: 成为leader后初次调用
 func (rf *Raft) trySendEntries() {
 	for i := 0; i < len(rf.peers); i++ {
-		// NOTE: 小心死锁
+		// BUG: 死锁
 		rf.mu.Lock()
 		nextIndex := rf.NextIndex[i]
 		firstLogIndex := rf.GetFirstLogEntry().Index
@@ -909,7 +875,7 @@ func (rf *Raft) sendEntries(server int) {
 		// NOTE: 使用copy替换reslice
 		// entries := rf.Log[prevLogIndex-rf.LastIncludedIndex:] // 创建引用，原切片被修改时也会被一同修改
 		entries := make([]LogEntry, len(rf.Log[startLogIndex:]))
-		copy(entries, rf.Log[startLogIndex:]) // 复制数组
+		copy(entries, rf.Log[startLogIndex:]) 
 		args := AppendEntriesArgs{
 			Term:              currentTerm,
 			LeaderId:          rf.me,
@@ -968,7 +934,6 @@ func (rf *Raft) sendEntries(server int) {
 				}
 			}
 			// rpc failed, retry
-			rf.DPrintf(false, "rf-[%d] send entires, rf.NextIndex[%d] update to %d", rf.me, server, rf.NextIndex[server])
 		} else {
 			// 7: RPC-Result: AppendEntries Success
 			// 发送方连续发送不同长度日志的AppendEntries，且短日志更晚到达，
@@ -976,7 +941,6 @@ func (rf *Raft) sendEntries(server int) {
 			finish = true
 			rf.NextIndex[server] = Max(rf.NextIndex[server], prevLogIndex+len(entries)+1)
 			rf.MatchIndex[server] = Max(rf.MatchIndex[server], prevLogIndex+len(entries))
-			rf.DPrintf(false, "rf-[%d] AppendEntries success, NextIndex = %v, MatchIndex = %v", rf.me, rf.NextIndex, rf.MatchIndex)
 		}
 		rf.mu.Unlock()
 	}
@@ -993,7 +957,6 @@ func (rf *Raft) sendSnapshot(server int) {
 		Snapshot:          rf.persister.snapshot,
 	}
 	reply := InstallSnapshotReply{}
-	rf.DPrintf(false, "rf-[%d] sendSnapshot to rf-[%d], LastIncludedIndex = %d", rf.me, server, rf.LastIncludedIndex)
 	rf.mu.Unlock()
 	if !rf.sendInstallSnapshot(server, &args, &reply) {
 		return
@@ -1013,12 +976,10 @@ func (rf *Raft) sendSnapshot(server int) {
 	rf.MatchIndex[server] = rf.LastIncludedIndex    // matchIndex use pessimistic strategy
 }
 
-// use in lab3
+// use in lab3，4
 func (rf *Raft) RaftStateSize() int {
 	return rf.persister.RaftStateSize()
 }
-
-
 
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -1042,7 +1003,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.cond = sync.NewCond(&rf.mu)
 	// Your initialization code here (2A, 2B, 2C).
 
-	rf.DPrintf(false, "rf-[%d] is Making, Len(peers) = %d", me, len(peers))
 	rf.BroadcastTime = BROADCAST_TIME
 	rf.ElectionTimeout = GetElectionTimeout() // 初始化，随机选举超时
 	rf.Role = FOLLOWER                        // 初始化为follower
