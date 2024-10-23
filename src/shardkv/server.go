@@ -314,7 +314,9 @@ func (kv *ShardKV) tryMoveShard() {
 			newTasks := make([]MvShard, len(kv.tasks)-1)
 			copy(newTasks, kv.tasks[1:])
 			kv.tasks = newTasks
+			kv.mu.Unlock()
 			kv.moveShard(task)
+			kv.mu.Lock()
 		}
 		kv.mu.Unlock()
 		time.Sleep(5 * time.Millisecond)
@@ -323,6 +325,7 @@ func (kv *ShardKV) tryMoveShard() {
 
 // MoveShard Call PutShard RPC
 func (kv *ShardKV) moveShard(task MvShard) {
+	kv.mu.Lock()
 	args := PutShardArgs{}
 	args.Shard = task.Shard
 	args.Data = task.ShardData
@@ -340,7 +343,7 @@ func (kv *ShardKV) moveShard(task MvShard) {
 			var reply PutShardReply
 			ok := srv.Call("ShardKV.PutShard", &args, &reply)
 			if ok && reply.Done {
-				kv.mu.Lock()
+				// kv.mu.Lock()
 				return
 			}
 		}
@@ -366,7 +369,6 @@ func (kv *ShardKV) readPersist(snapshot []byte) {
 
 func (kv *ShardKV) snapshot() {
 	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(SnapshotData{
@@ -380,6 +382,7 @@ func (kv *ShardKV) snapshot() {
 	applyIndex := kv.applyIndex
 	data := w.Bytes()
 	kv.rf.Snapshot(applyIndex, data)
+	kv.mu.Unlock()
 }
 
 func (kv *ShardKV) doOperation(op Op) {
@@ -437,7 +440,7 @@ func (kv *ShardKV) doPutShard(op Op) {
 }
 
 func (kv *ShardKV) doMoveShard(op Op) {
-	// ClientId 为 server GID，SequenceNum 为发送时 ConfigNum
+	// serverSequenceNums去重，ClientId 为 server GID，SequenceNum 为发送时 ConfigNum
 	if kv.serverSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum || !kv.curShards[op.Shard] {
 		return
 	}
