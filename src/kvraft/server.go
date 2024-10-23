@@ -59,12 +59,11 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	DPrintf(false, "server-[%d] Get Command, ClientId = %d, Seq = %d, Key = %s", kv.me, args.ClientId, args.SequenceNum, args.Key)
 
 	var timeout int32
 	atomic.StoreInt32(&timeout, 0)
 	go func() {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1000* time.Millisecond)
 		atomic.StoreInt32(&timeout, 1)
 	}()
 
@@ -78,7 +77,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		kv.mu.Lock()
 		// 利用操作序列单调递增的特性，判断Command是否提交和执行
 		if kv.clientSequenceNums[args.ClientId] >= args.SequenceNum {
-			DPrintf(false, "server-[%d] Get Command %s", kv.me, OK)
 			reply.Value = kv.data[args.Key]
 			kv.mu.Unlock()
 			return
@@ -115,12 +113,11 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	DPrintf(false, "server-[%d] PutAppend Command, ClientId = %d, Seq = %d, Key = %s, Val = %s, Op = %s", kv.me, args.ClientId, args.SequenceNum, args.Key, args.Value, args.Op)
 
 	var timeout int32
 	atomic.StoreInt32(&timeout, 0)
 	go func() {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1000* time.Millisecond)
 		atomic.StoreInt32(&timeout, 1)
 	}()
 
@@ -132,7 +129,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.mu.Lock()
 		if kv.clientSequenceNums[args.ClientId] >= args.SequenceNum {
 			kv.mu.Unlock()
-			DPrintf(false, "server-[%d] PutAppend Command %s", kv.me, OK)
 			return
 		}
 		kv.mu.Unlock()
@@ -162,7 +158,6 @@ func (kv *KVServer) killed() bool {
 func (kv *KVServer) receiveMsg() {
 	for !kv.killed() {
 		msg := <-kv.applyCh
-		DPrintf(false, "server-[%d], msg receive = %v, raftStateSize = %d", kv.me, msg, kv.rf.RaftStateSize())
 		if msg.CommandValid {
 			// log Command
 			kv.mu.Lock()
@@ -199,7 +194,7 @@ func (kv *KVServer) receiveMsg() {
 }
 
 // check raft's logs current size periodically, and compact logs if hit the threshold
-// UGLY: 平衡trySnapshot的频率，必须让goroutine休眠，否则会一直占用资源
+// BUG: 平衡trySnapshot的频率，必须让goroutine休眠，否则会一直占用资源
 func (kv *KVServer) trySnapshot() {
 
 	for !kv.killed() {
