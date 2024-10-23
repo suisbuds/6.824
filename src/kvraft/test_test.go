@@ -709,18 +709,16 @@ func TestSnapshotRecover3B(t *testing.T) {
 
 func TestSnapshotRecoverManyClients3B(t *testing.T) {
 	/*
-	* BUG: log were not trimmed in this test，意思是Lab2D+Lab3B写的不好，导致raftstate里的log太长了
-	* NOTE: maxraftstate indicates the maximum of  servers' raftstate(including the log),  but not including K/V Sever snapshots
-	* DEBUG:
-	* NOTE:修改这里
-	* 1. 首先为了通过速度测试，我设置了quickCommitCheck=20，睡眠时间为1ms，由于server数量多、频繁crash重启，导致提交的CommitIndex过多，积压了大量log，又来不及压缩，引发了log were not trimmed
-	* 2. 其次Snapshot压缩性能不好，我只有Snapshot一种压缩日志手段
-	* 关键点：调参
-	* - doleaderTask() 快速提交阶段的睡眠时间 = 3ms，如果是1ms太快了，>=5ms Raft无法达成一致，也影响提交速度
-	* - quickCommitCheck = 20，经验值
-	* - 删除CondInstallSnapshot()实现，不需要
-	* - sever里snapshot的频率：1ms一次，频繁压缩会导致网络分区时键值对不一致 / 甚至读取Log越界，所以要设置阀值
-	* - 在receiveMsg额外snapshot,接近阀值时压缩
+	* BUG: log were not trimmed in this test，意思是Lab2+Lab3写的不好
+	* NOTE:
+	* 1. maxraftstate indicates the maximum of  servers' raftstate(including the log),  but not including K/V Sever snapshots
+	* 2. 首先为了通过速度测试，我设置了quickCommitCheck=20，睡眠时间为1ms，由于server数量多、频繁crash重启，导致提交的CommitIndex过多，积压了大量log，又来不及压缩，引发了log were not trimmed
+	* 3. 其次Snapshot压缩性能不好，而我只有Snapshot一种压缩日志手段
+	*
+	* 1. doleaderTask() 快速提交阶段的睡眠时间 = 3ms，如果是1ms太快了，>=5ms Raft无法达成一致，也影响提交速度
+	* 2.  quickCommitCheck = 20，经验值
+	* 3. 删除CondInstallSnapshot()实现，不需要
+	* 4. sever里snapshot的频率：3ms一次，频繁压缩会导致网络分区时键值对不一致 / 读取Log越界 / 随机键测试出错，还要设置阀值
 	 */
 
 	// Test: restarts, snapshots, many clients (3B) ...
