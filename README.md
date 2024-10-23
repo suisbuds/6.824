@@ -12,6 +12,6 @@
   - [x] Lab3B: Key/Value Service With Snapshots 
 - [x] Lab 4: Sharded Key/Value Service 
   - [x] Lab4A: The Shard Controller
-  - [x] Lab4B: Sharded Key/Value Server 
+  - [x] Lab4B: Sharded Key/Value Server
     - [x] Challenge 1: Garbage Collection Of State
     - [x] Challenge 2: Client Requests During Configuration Changes

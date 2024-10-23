@@ -12,13 +12,11 @@ import (
 	"6.824/raft"
 )
 
-const Debug = false
+const Debug = true
 
 func DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		if debug {
-			log.Printf(format, a...)
-		}
+	if Debug && debug {
+		log.Printf(format, a...)
 	}
 	return
 }
@@ -28,7 +26,6 @@ const (
 	LEAVE     = 1
 	MOVE      = 2
 	QUERY     = 3
-	ASKSHARDS = 4
 )
 
 type ShardCtrler struct {
@@ -124,7 +121,6 @@ func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 	// Your code here.
 	_, _, isLeader := sc.rf.Start(Op{
-		// BUG:参数写错了
 		Type:        MOVE,
 		Shard:       args.Shard,
 		GID:         args.GID,
