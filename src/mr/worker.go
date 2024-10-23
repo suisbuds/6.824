@@ -53,9 +53,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				// 非阻塞式，轮询直至任务完成
 				for !call("Coordinator.MapFinish", &args, &reply) {
 				}
-				// fmt.Printf("map task %d finished\n", ret)
 			} else if finish {
-				// 全部完成
 				mapFinish = true
 			}
 		} else {
@@ -66,13 +64,11 @@ func Worker(mapf func(string, string) []KeyValue,
 				// 轮询reduce任务是否完成
 				for !call("Coordinator.ReduceFinish", &args, &reply) {
 				}
-				// fmt.Printf("reduce task %d finished\n", ret)
 			} else if finish {
 				reduceFinish = true
 			}
 		}
 	}
-	// 全部完成
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 }
@@ -90,11 +86,9 @@ func DoMapTask(mapf func(string, string) []KeyValue) (int, bool) {
 	// 调用map请求
 	ok := call("Coordinator.AskMapTask", &args, &reply)
 	if !ok {
-		// fmt.Printf("Call AskMapTask failed!\n")
 		return FAILED, false
 	}
 	if reply.TaskId == -1&&(reply.Message==ALL_FINISH||reply.Message==BUSY) {
-		// fmt.Printf("All map task busy or over!\n")
 		return FAILED, reply.AllFinish
 	}
 	// 执行map任务
@@ -130,7 +124,6 @@ func DoMapTask(mapf func(string, string) []KeyValue) (int, bool) {
 		for _, kv := range intermediate[i] {
 			err := enc.Encode(&kv)
 			if err != nil {
-				// fmt.Printf("Encode failed!\n")
 				return FAILED, false
 			}
 		}
@@ -159,11 +152,9 @@ func DoReduceTask(reducef func(string, []string) string) (int, bool) {
 	// 调用reduce请求
 	ok := call("Coordinator.AskReduceTask", &args, &reply)
 	if !ok {
-		// fmt.Printf("Call AskReduceTask failed!\n")
 		return FAILED, false
 	}
 	if reply.TaskId == -1&&(reply.Message==ALL_FINISH||reply.Message==BUSY) {
-		// fmt.Printf("All reduce task busy or over!\n")
 		return FAILED, reply.AllFinish
 	}
 	// 读取intermediate files
@@ -175,7 +166,6 @@ func DoReduceTask(reducef func(string, []string) string) (int, bool) {
 		fileName := fmt.Sprintf("%s/mr-%d-%d", worker.Path, i, taskId)
 		file, err := os.Open(fileName)
 		if err != nil {
-			// fmt.Printf("Open %s failed!\n", fileName)
 			return FAILED, false
 		}
 		dec := json.NewDecoder(file)
@@ -193,7 +183,6 @@ func DoReduceTask(reducef func(string, []string) string) (int, bool) {
 	// 创建临时文件，输出reduce的结果
 	tmpFile, err := ioutil.TempFile(path, "tmp")
 	if err != nil {
-		// fmt.Printf("TempFile failed!\n")
 		return FAILED, false
 	}
 	// 外部排序,将相同的键值对放到一起,然后reduce生成reduce output
@@ -220,11 +209,9 @@ func DoReduceTask(reducef func(string, []string) string) (int, bool) {
 	// 对于 reduce 任务，此时结果文件已经打开，所以需要新建temp, 避免worker崩溃后在磁盘生成错误结果
 	err = os.Rename(tmpFile.Name(), newPath)
 	if err != nil {
-		// fmt.Printf("Rename failed!\n")
 		return FAILED, false
 	}
 	tmpFile.Close()
-	// reduce任务完成
 	return taskId, false
 }
 

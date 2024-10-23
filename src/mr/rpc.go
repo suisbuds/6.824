@@ -27,7 +27,6 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
-// 状态变量, 需要考虑到int值与任务id的冲突
 const (
 	FAILED = -1 //异常错误
 	// 单个任务状态
@@ -36,8 +35,8 @@ const (
 	FINISH     = 2 //任务完成
 	// 任务执行信息
 	ALL_FINISH = "ALL_FINISH" //所有任务完成
-	BUSY       = "BUSY" //无空闲worker
-	CONTINUE   = "CONTINUE" //分配任务或超时重发
+	BUSY       = "BUSY"       //无空闲worker
+	CONTINUE   = "CONTINUE"   //分配任务或超时重发
 )
 
 // worker服务器地址
@@ -64,7 +63,7 @@ type AskMapReply struct {
 	NReduce   int    // reduce任务数量
 	FileName  string //input file
 	AllFinish bool   // 所有map任务完成
-	Message  string //任务执行信息
+	Message   string //任务执行信息
 }
 
 // worker请求coordinator分配reduce任务
@@ -77,7 +76,7 @@ type AskReduceReply struct {
 	TaskId              int           // reduce任务编号
 	IntermediateWorkers []MachinePath // 处理map任务和intermediate files的workers
 	AllFinish           bool          // 所有reduce任务完成
-	Message			string        //任务执行信息
+	Message             string        //任务执行信息
 }
 
 type TaskFinishArgs struct {

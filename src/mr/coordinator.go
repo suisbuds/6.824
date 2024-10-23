@@ -14,7 +14,8 @@ import (
 // coordinator服务器
 type Coordinator struct {
 	// Your definitions here.
-	// 可以记录worker的健康状态map?
+	// 可以记录worker的健康状态map
+	
 	mu           sync.Mutex // 互斥锁在并发时保护服务器数据
 	Path         string     // 服务器运行地址
 	FileNames    []string   //输入的所有文件
@@ -75,7 +76,6 @@ func (c *Coordinator) MapFinish(args *TaskFinishArgs, _ *TaskFinishReply) error 
 	i := args.TaskId
 	c.MapTask[i].State = FINISH
 	c.MapRemain--
-	// fmt.Printf("map task %d finish\n", i)
 	return nil
 }
 
@@ -119,7 +119,6 @@ func (c *Coordinator) ReduceFinish(args *TaskFinishArgs, _ *TaskFinishReply) err
 	c.ReduceTask[i].State = FINISH
 	// 执行完一个reduce任务
 	c.ReduceRemain--
-	// fmt.Printf("reduce task %d finish\n", i)
 	return nil
 }
 
