@@ -80,14 +80,3 @@ type QueryReply struct {
 	Config Config
 }
 
-type GetShardArgs struct {
-	Num         int // desired config number
-	ClientId    int64
-	SequenceNum int64
-}
-
-type GetShardReply struct {
-	Done   bool
-	Err    Err
-	Config Config
-}
