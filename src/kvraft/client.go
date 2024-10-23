@@ -8,7 +8,6 @@ import (
 	"6.824/labrpc"
 )
 
-// 感觉clerk不会有并发问题？
 type Clerk struct {
 	servers []*labrpc.ClientEnd // client terminals
 	// You will have to modify this struct.
@@ -45,11 +44,11 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // the types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
+
 // Get操作是幂等的
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	DPrintf(false, "[clerk-start] Client try to Get Key = %s", key)
 	atomic.AddInt64(&ck.sequenceNum, 1) // mark client's operation
 	// If leaderId is not -1, try to send Get RPC to the leader
 	if ck.leaderId != NONE {
@@ -62,7 +61,6 @@ func (ck *Clerk) Get(key string) string {
 		ok := ck.servers[ck.leaderId].Call("KVServer.Get", &args, &reply)
 		// current operation is successful
 		if ok && reply.Err == "" {
-			DPrintf(false, "[clerk-over] Get Key = %s, val = %s, old learderId = %d", key, reply.Value, ck.leaderId)
 			return reply.Value
 		}
 	}
@@ -78,7 +76,6 @@ func (ck *Clerk) Get(key string) string {
 			ok := ck.servers[i].Call("KVServer.Get", &args, &reply)
 			if ok && reply.Err == "" {
 				ck.leaderId = i // find the leader
-				DPrintf(false, "[clerk-over] Get Key = %s, val = %s, new leaderId = %d", key, reply.Value, ck.leaderId)
 				return reply.Value
 			}
 		}
@@ -95,7 +92,6 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	DPrintf(false, "[clerk-start] Client try to PutAppend, key = %s, val = %s, op = %s", key, value, op)
 	atomic.AddInt64(&ck.sequenceNum, 1) // mark client's operation
 	// If leaderId is not -1, try to send PutAppend RPC to the leader
 	if ck.leaderId != NONE {
@@ -109,7 +105,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		reply := PutAppendReply{}
 		ok := ck.servers[ck.leaderId].Call("KVServer.PutAppend", &args, &reply)
 		if ok && reply.Err == "" {
-			DPrintf(false, "[clerk-over] PutAppend key = %s, val = %s, op = %s, old leaderId = %d", key, value, op, ck.leaderId)
 			return
 		}
 	}
@@ -127,7 +122,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			ok := ck.servers[i].Call("KVServer.PutAppend", &args, &reply)
 			if ok && reply.Err == "" {
 				ck.leaderId = i
-				DPrintf(false, "[clerk-over] PutAppend key = %s, val = %s, op = %s, new leaderId = %d", key, value, op, ck.leaderId)
 				return
 			}
 		}
