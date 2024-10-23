@@ -211,7 +211,7 @@ func (kv *ShardKV) PutShard(args *PutShardArgs, reply *PutShardReply) {
 			return
 		}
 		kv.mu.Lock()
-		// BUG: 用 serverSequenceNums 去重而不是 clientSequenceNums
+		// BUG: 用 serverSequenceNums 去重而不是 clientSequenceNums，造成死锁
 		if kv.serverSequenceNums[args.Shard][args.ClientId] >= args.SequenceNum {
 			reply.Done = true
 			kv.mu.Unlock()
@@ -353,17 +353,40 @@ func (kv *ShardKV) moveShard(task MvShard) {
 
 func (kv *ShardKV) readPersist(snapshot []byte) {
 	// 读取快照，服务器运行状态的字段都要保存
-	var snapshotData SnapshotData
+	// var snapshotData SnapshotData
+	// r := bytes.NewBuffer(snapshot)
+	// d := labgob.NewDecoder(r)
+	// if d.Decode(&snapshotData) == nil {
+	// 	kv.mu.Lock()
+	// 	kv.data = snapshotData.Data
+	// 	kv.clientSequenceNums = snapshotData.ClientSequenceNums
+	// 	kv.serverSequenceNums = snapshotData.ServerSequenceNums
+	// 	kv.curShards = snapshotData.CurShards
+	// 	kv.tasks = snapshotData.Tasks
+	// 	kv.checkConfig = snapshotData.CheckConfig
+	// 	kv.mu.Unlock()
+	// }
+	var data []map[string]string
+	var clientSequenceNums []map[int64]int64
+	var serverSequenceNums []map[int64]int64
+	var curShards []bool
+	var checkConfig bool
+	var tasks []MvShard
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
-	if d.Decode(&snapshotData) == nil {
+	if d.Decode(&data) == nil &&
+		d.Decode(&clientSequenceNums) == nil &&
+		d.Decode(&serverSequenceNums) == nil &&
+		d.Decode(&curShards) == nil &&
+		d.Decode(&tasks) == nil &&
+		d.Decode(&checkConfig) == nil {
 		kv.mu.Lock()
-		kv.data = snapshotData.Data
-		kv.clientSequenceNums = snapshotData.ClientSequenceNums
-		kv.serverSequenceNums = snapshotData.ServerSequenceNums
-		kv.curShards = snapshotData.CurShards
-		kv.tasks = snapshotData.Tasks
-		kv.checkConfig = snapshotData.CheckConfig
+		kv.data = data
+		kv.clientSequenceNums = clientSequenceNums
+		kv.serverSequenceNums = serverSequenceNums
+		kv.curShards = curShards
+		kv.tasks = tasks
+		kv.checkConfig = checkConfig
 		kv.mu.Unlock()
 	}
 }
@@ -372,14 +395,20 @@ func (kv *ShardKV) snapshot() {
 	kv.mu.Lock()
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	e.Encode(SnapshotData{
-		Data:               kv.data,
-		ClientSequenceNums: kv.clientSequenceNums,
-		ServerSequenceNums: kv.serverSequenceNums,
-		CurShards:          kv.curShards,
-		Tasks:              kv.tasks,
-		CheckConfig:        kv.checkConfig,
-	})
+	e.Encode(kv.data)
+	e.Encode(kv.clientSequenceNums)
+	e.Encode(kv.serverSequenceNums)
+	e.Encode(kv.curShards)
+	e.Encode(kv.tasks)
+	e.Encode(kv.checkConfig)
+	// e.Encode(SnapshotData{
+	// 	Data:               kv.data,
+	// 	ClientSequenceNums: kv.clientSequenceNums,
+	// 	ServerSequenceNums: kv.serverSequenceNums,
+	// 	CurShards:          kv.curShards,
+	// 	Tasks:              kv.tasks,
+	// 	CheckConfig:        kv.checkConfig,
+	// })
 	applyIndex := kv.applyIndex
 	data := w.Bytes()
 	kv.rf.Snapshot(applyIndex, data)
@@ -447,14 +476,21 @@ func (kv *ShardKV) doMoveShard(op Op) {
 	}
 	kv.serverSequenceNums[op.Shard][op.ClientId] = op.SequenceNum
 	kv.curShards[op.Shard] = false // shard 转移
-	task := MvShard{
-		Config:        op.Config,
-		Servers:       op.Servers,
-		Shard:         op.Shard,
-		ShardData:     make(map[string]string),
-		ShardSequence: make(map[int64]int64),
-		ShardBuffer:   make(map[int64]string),
-	}
+	var task MvShard
+	task.Config = op.Config
+	task.Servers = op.Servers
+	task.Shard = op.Shard
+	task.ShardData = make(map[string]string)
+	task.ShardSequence = make(map[int64]int64)
+	task.ShardBuffer = make(map[int64]string)
+	// task := MvShard{
+	// 	Config:        op.Config,
+	// 	Servers:       op.Servers,
+	// 	Shard:         op.Shard,
+	// 	ShardData:     make(map[string]string),
+	// 	ShardSequence: make(map[int64]int64),
+	// 	ShardBuffer:   make(map[int64]string),
+	// }
 	// copy shard 数据，然后清空
 	for k, v := range kv.data[op.Shard] {
 		task.ShardData[k] = v
@@ -498,8 +534,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 	// 需要labgob编解码自定义类型时，需要注册
-	labgob.Register(SnapshotData{})
-	labgob.Register(MvShard{})
+	// labgob.Register(SnapshotData{})
+	// labgob.Register(MvShard{})
 
 	kv := new(ShardKV)
 	kv.me = me
