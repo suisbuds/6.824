@@ -10,10 +10,8 @@ import (
 const Debug = true
 
 func (rf *Raft) DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		if debug {
-			log.Printf(format, a...)
-		}
+	if Debug && debug {
+		log.Printf(format, a...)
 	}
 	return
 }
