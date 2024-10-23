@@ -61,7 +61,7 @@ type ShardKV struct {
 	sm                 *shardctrler.Clerk
 	config             shardctrler.Config
 	data               []map[string]string // key/value
-	clientSequenceNums []map[int64]int64 // 记录 client 完成的操作
+	clientSequenceNums []map[int64]int64   // 记录 client 完成的操作
 	applyIndex         int
 
 	curShards          []bool            // kv server 当前持有的 shards
@@ -87,8 +87,8 @@ type SnapshotData struct {
 	ClientSequenceNums []map[int64]int64
 	ServerSequenceNums []map[int64]int64
 	CurShards          []bool
-	Tasks              []MvShard
-	CheckConfig        bool
+	Tasks              []MvShard // 保存 shard 数据
+	CheckConfig        bool 
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
@@ -263,7 +263,7 @@ func (kv *ShardKV) updateConfig() {
 		for i := range kv.curShards {
 			// 检查 group 不需要的 shards，执行 MOVESHARD, 并在 Raft 集群达成一致
 			if kv.curShards[i] && !kv.requiredShards[i] {
-				_, _, ok := kv.rf.Start(Op{
+				kv.rf.Start(Op{
 					Type:        MOVESHARD,
 					Config:      kv.config.Num,
 					Servers:     kv.config.Groups[kv.config.Shards[i]],
@@ -271,9 +271,6 @@ func (kv *ShardKV) updateConfig() {
 					ClientId:    int64(kv.gid),
 					SequenceNum: int64(kv.config.Num),
 				})
-				if ok {
-					DPrintf(false, "[group: %d]-[server: %d] Start MoveShard", kv.gid, kv.me)
-				}
 			}
 		}
 		kv.mu.Unlock()
@@ -314,7 +311,7 @@ func (kv *ShardKV) tryMoveShard() {
 			// kv.tasks = append(kv.tasks[:0], kv.tasks[1:]...)
 			newTasks := make([]MvShard, len(kv.tasks)-1)
 			copy(newTasks, kv.tasks[1:])
-			kv.tasks = newTasks
+			kv.tasks = newTasks // 发送端标记 MvShard 完成，删除任务
 			kv.mu.Unlock()
 			kv.moveShard(task)
 			kv.mu.Lock()
@@ -332,7 +329,7 @@ func (kv *ShardKV) moveShard(task MvShard) {
 	args.Data = task.ShardData
 	args.ClientId = int64(kv.gid)
 	args.SequenceNum = int64(task.Config)
-	args.ClientSequenceNums = task.ShardSequence
+	args.ClientSequenceNums = task.ShardSequence // 让目标 sever 继续操作该 shard
 	args.Buffer = task.ShardBuffer
 	servers := task.Servers
 	kv.mu.Unlock()
@@ -425,6 +422,7 @@ func (kv *ShardKV) doPutAppend(op Op) {
 
 func (kv *ShardKV) doPutShard(op Op) {
 	// serverSequenceNums 去重，ClientId 为 发送方 GID，SequenceNum 为 发送时的 ConfigNum
+	// < shard, Sender GID, ConfigNum >
 	if kv.serverSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum {
 		return
 	}
@@ -432,7 +430,7 @@ func (kv *ShardKV) doPutShard(op Op) {
 	kv.curShards[op.Shard] = true
 	kv.data[op.Shard] = map[string]string{}
 	kv.clientSequenceNums[op.Shard] = map[int64]int64{}
-	// copy 避免新建引用
+	// copy 避免新建引用，接收端获得 shard
 	for k, v := range op.ShardData {
 		kv.data[op.Shard][k] = v
 	}
@@ -443,6 +441,7 @@ func (kv *ShardKV) doPutShard(op Op) {
 
 func (kv *ShardKV) doMoveShard(op Op) {
 	// serverSequenceNums去重，ClientId 为 server GID，SequenceNum 为发送时 ConfigNum
+	// < shard, Server GID, ConfigNum>
 	if kv.serverSequenceNums[op.Shard][op.ClientId] >= op.SequenceNum || !kv.curShards[op.Shard] {
 		return
 	}
@@ -457,7 +456,7 @@ func (kv *ShardKV) doMoveShard(op Op) {
 		ShardSequence: make(map[int64]int64),
 		ShardBuffer:   make(map[int64]string),
 	}
-	// copy shard 数据，然后清空
+	// copy shard ，发送端创建完 MvShard 后删除 shard ，实现垃圾回收
 	for k, v := range kv.data[op.Shard] {
 		task.ShardData[k] = v
 	}
