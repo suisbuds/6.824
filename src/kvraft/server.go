@@ -191,7 +191,7 @@ func (kv *KVServer) trySnapshot() {
 			kv.snapshot()
 		}
 		// BUG:必须让goroutine休眠，平衡snapshot频率，否则会过度占用资源 / log compaction过多
-		time.Sleep(3 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
