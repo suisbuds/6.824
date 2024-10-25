@@ -18,4 +18,5 @@
     - [x] Challenge 1: Garbage Collection Of State
     - [x] Challenge 2: Client Requests During Configuration Changes
 
+
 ![](https://telegraph-image-1if.pages.dev/file/bafc6c2491670212922cf-7a8b388d03d50a8c8e.jpg)
