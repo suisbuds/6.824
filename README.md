@@ -1,5 +1,8 @@
 
-**Can't Guranatee Bug-Free, some errors can't reproduce stably**
+1. **Professor Robert Morris requires that the latest  code for 6.584 course mustn't be public on  GitHub.**
+**This repository contains code from the older 6.824 course.**
+2. **Please try to complete the labs on your own before checking others' solutions.**
+3. **This repository can't guranatee Bug-Free, because some errors can't reproduce stably.**
 
 - [x] [Lab 1: MapReduce](https://github.com/suisbuds/shardRaft/blob/main/img/Lab1.png)
   - [ ] Challenge 1: Implement MapReduce Application
