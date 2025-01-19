@@ -212,7 +212,17 @@ func partitioner(t *testing.T, cfg *config, ch chan bool, done *int32) {
 // maxraftstate is a positive number, the size of the state for Raft (i.e., log
 // size) shouldn't exceed 8*maxraftstate. If maxraftstate is negative,
 // snapshots shouldn't be used.
-func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliable bool, crash bool, partitions bool, maxraftstate int, randomkeys bool) {
+func GenericTest(
+	t *testing.T,
+	part string,
+	nclients int,
+	nservers int,
+	unreliable bool,
+	crash bool,
+	partitions bool,
+	maxraftstate int,
+	randomkeys bool,
+) {
 
 	// generate a test title
 	title := "Test: "

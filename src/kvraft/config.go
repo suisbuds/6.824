@@ -44,13 +44,13 @@ type config struct {
 	mu           sync.Mutex
 	t            *testing.T
 	net          *labrpc.Network
-	n            int // server nums
-	kvservers    []*KVServer // instances of KV server
+	n            int               // server nums
+	kvservers    []*KVServer       // instances of KV server
 	saved        []*raft.Persister // each server's persisted state
-	endnames     [][]string // names of each server's sending ClientEnds
+	endnames     [][]string        // names of each server's sending ClientEnds
 	clerks       map[*Clerk][]string
 	nextClientId int
-	maxraftstate int // trigger a snapshot
+	maxraftstate int       // trigger a snapshot
 	start        time.Time // time at which make_config() was called
 	// begin()/end() statistics
 	t0    time.Time // time at which test_test.go called cfg.begin()

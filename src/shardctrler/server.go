@@ -22,10 +22,10 @@ func DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
 }
 
 const (
-	JOIN      = 0
-	LEAVE     = 1
-	MOVE      = 2
-	QUERY     = 3
+	JOIN  = 0
+	LEAVE = 1
+	MOVE  = 2
+	QUERY = 3
 )
 
 type ShardCtrler struct {

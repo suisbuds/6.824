@@ -16,8 +16,8 @@ const (
 )
 
 func DPrintf(debug bool, format string, a ...interface{}) (n int, err error) {
-	if Debug && debug{
-			log.Printf(format, a...)
+	if Debug && debug {
+		log.Printf(format, a...)
 	}
 	return
 }

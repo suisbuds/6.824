@@ -88,7 +88,7 @@ type SnapshotData struct {
 	ServerSequenceNums []map[int64]int64
 	CurShards          []bool
 	Tasks              []MvShard // 保存 shard 数据
-	CheckConfig        bool 
+	CheckConfig        bool
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
@@ -494,7 +494,15 @@ func (kv *ShardKV) doMoveShard(op Op) {
 //
 // StartServer() must return quickly, so it should start goroutines
 // for any long-running work.
-func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int, gid int, ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
+func StartServer(
+	servers []*labrpc.ClientEnd,
+	me int,
+	persister *raft.Persister,
+	maxraftstate int,
+	gid int,
+	ctrlers []*labrpc.ClientEnd,
+	make_end func(string) *labrpc.ClientEnd,
+) *ShardKV {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})

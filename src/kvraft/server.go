@@ -223,7 +223,7 @@ func (kv *KVServer) snapshot() {
 	e.Encode(kv.applyIndex)
 
 	applyIndex := kv.applyIndex // 当前已运行的最大操作序号
-	snapshot := w.Bytes()       
+	snapshot := w.Bytes()
 	kv.rf.Snapshot(applyIndex, snapshot)
 }
 
@@ -274,7 +274,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 	kv.readPersist(persister)
-
 
 	// keep running goroutine for receiving Msg and trying Snapshot
 	go kv.receiveMsg()

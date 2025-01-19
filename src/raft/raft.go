@@ -875,7 +875,7 @@ func (rf *Raft) sendEntries(server int) {
 		// NOTE: 使用copy替换reslice
 		// entries := rf.Log[prevLogIndex-rf.LastIncludedIndex:] // 创建引用，原切片被修改时也会被一同修改
 		entries := make([]LogEntry, len(rf.Log[startLogIndex:]))
-		copy(entries, rf.Log[startLogIndex:]) 
+		copy(entries, rf.Log[startLogIndex:])
 		args := AppendEntriesArgs{
 			Term:              currentTerm,
 			LeaderId:          rf.me,

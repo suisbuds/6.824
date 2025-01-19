@@ -271,7 +271,12 @@ func fillDefault(model Model) Model {
 	return model
 }
 
-func checkParallel(model Model, history [][]entry, computeInfo bool, timeout time.Duration) (CheckResult, linearizationInfo) {
+func checkParallel(
+	model Model,
+	history [][]entry,
+	computeInfo bool,
+	timeout time.Duration,
+) (CheckResult, linearizationInfo) {
 	ok := true
 	timedOut := false
 	results := make(chan bool, len(history))
@@ -362,7 +367,12 @@ func checkEvents(model Model, history []Event, verbose bool, timeout time.Durati
 	return checkParallel(model, l, verbose, timeout)
 }
 
-func checkOperations(model Model, history []Operation, verbose bool, timeout time.Duration) (CheckResult, linearizationInfo) {
+func checkOperations(
+	model Model,
+	history []Operation,
+	verbose bool,
+	timeout time.Duration,
+) (CheckResult, linearizationInfo) {
 	model = fillDefault(model)
 	partitions := model.Partition(history)
 	l := make([][]entry, len(partitions))

@@ -30,7 +30,6 @@ func ihash(key string) int {
 
 // main/mrworker.go calls this function.
 
-
 // loadPlugin后传入mapf和reducef
 // 最终输出键值对并输入到intermediate：func mapf(filename string, contents string) []KeyValue
 // func reducef(key string, values []string) string
@@ -88,7 +87,7 @@ func DoMapTask(mapf func(string, string) []KeyValue) (int, bool) {
 	if !ok {
 		return FAILED, false
 	}
-	if reply.TaskId == -1&&(reply.Message==ALL_FINISH||reply.Message==BUSY) {
+	if reply.TaskId == -1 && (reply.Message == ALL_FINISH || reply.Message == BUSY) {
 		return FAILED, reply.AllFinish
 	}
 	// 执行map任务
@@ -154,7 +153,7 @@ func DoReduceTask(reducef func(string, []string) string) (int, bool) {
 	if !ok {
 		return FAILED, false
 	}
-	if reply.TaskId == -1&&(reply.Message==ALL_FINISH||reply.Message==BUSY) {
+	if reply.TaskId == -1 && (reply.Message == ALL_FINISH || reply.Message == BUSY) {
 		return FAILED, reply.AllFinish
 	}
 	// 读取intermediate files

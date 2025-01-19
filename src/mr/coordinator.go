@@ -15,7 +15,7 @@ import (
 type Coordinator struct {
 	// Your definitions here.
 	// 可以记录worker的健康状态map
-	
+
 	mu           sync.Mutex // 互斥锁在并发时保护服务器数据
 	Path         string     // 服务器运行地址
 	FileNames    []string   //输入的所有文件
@@ -42,7 +42,7 @@ func (c *Coordinator) AskMapTask(args *AskMapArgs, reply *AskMapReply) error {
 	defer c.mu.Unlock()
 	if c.MapRemain == 0 {
 		reply.TaskId = -1
-		reply.Message=ALL_FINISH
+		reply.Message = ALL_FINISH
 		reply.AllFinish = true
 		return nil
 	}
@@ -59,13 +59,13 @@ func (c *Coordinator) AskMapTask(args *AskMapArgs, reply *AskMapReply) error {
 			reply.FileName = c.FileNames[i]
 			reply.TaskId = i
 			reply.NReduce = len(c.ReduceTask)
-			reply.Message=CONTINUE
+			reply.Message = CONTINUE
 			reply.AllFinish = false
 			return nil
 		}
 	}
 	reply.TaskId = -1 // 无空闲worker
-	reply.Message=BUSY
+	reply.Message = BUSY
 	reply.AllFinish = false
 	return nil
 }
@@ -84,7 +84,7 @@ func (c *Coordinator) AskReduceTask(args *AskReduceArgs, reply *AskReduceReply) 
 	defer c.mu.Unlock()
 	if c.ReduceRemain == 0 {
 		reply.TaskId = -1
-		reply.Message=ALL_FINISH
+		reply.Message = ALL_FINISH
 		reply.AllFinish = true
 		return nil
 	}
@@ -101,14 +101,14 @@ func (c *Coordinator) AskReduceTask(args *AskReduceArgs, reply *AskReduceReply) 
 				reply.IntermediateWorkers = append(reply.IntermediateWorkers, mapTask.Worker)
 			}
 			reply.TaskId = i
-			reply.Message=CONTINUE
+			reply.Message = CONTINUE
 			reply.AllFinish = false
 			return nil
 		}
 	}
 	reply.TaskId = -1 // 无空闲worker
 	reply.AllFinish = false
-	reply.Message=BUSY
+	reply.Message = BUSY
 	return nil
 }
 
